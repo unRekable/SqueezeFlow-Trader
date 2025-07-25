@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY data/ /app/data/
+COPY utils/ /app/utils/
+COPY indicators/ /app/indicators/
+COPY services/ /app/services/
+
+# Create entrypoint
+COPY services/squeezeflow_calculator.py /app/squeezeflow_calculator.py
+RUN echo '#!/bin/bash\ncd /app && python squeezeflow_calculator.py' > /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+EXPOSE 8001
+
+CMD ["/app/entrypoint.sh"]

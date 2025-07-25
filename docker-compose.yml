@@ -1,0 +1,243 @@
+# version: '3.8'  # Obsolete in newer Docker Compose
+
+name: squeezeflow-trader
+
+networks:
+  squeezeflow_network:
+    driver: bridge
+  aggr_backend:
+    external: true
+
+volumes:
+  influxdb_data:
+    driver: local
+  grafana_data:
+    driver: local
+  redis_data:
+    driver: local
+  freqtrade_data:
+    driver: local
+
+services:
+  # InfluxDB - Use existing from aggr-server
+  # influxdb:
+  #   External InfluxDB at localhost:8086 (aggr-server)
+
+  # Redis - Caching and Message Queue
+  redis:
+    container_name: squeezeflow-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - squeezeflow_network
+
+  # Grafana - Monitoring and Visualization
+  grafana:
+    container_name: squeezeflow-grafana
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=squeezeflow123
+      - INFLUX_HOST=host.docker.internal
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+    # depends_on:
+    #   - influxdb  # External InfluxDB
+    networks:
+      - squeezeflow_network
+
+  # aggr-server - Real-time Data Collection (ORIGINAL aus aggr-server/)
+  aggr-server:
+    container_name: aggr-server
+    build:
+      context: ./aggr-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # Original Port
+    environment:
+      - PORT=3000
+      - WORKDIR=/usr/src/app/
+      - FILES_LOCATION=./data
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+    volumes:
+      - ./aggr-server:/usr/src/app/
+    networks:
+      - squeezeflow_network
+      - aggr_backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1024M
+        reservations:
+          cpus: '0.3'
+          memory: 512M
+
+  # InfluxDB - Time-series Database (ORIGINAL aus aggr-server/)
+  aggr-influx:
+    container_name: aggr-influx
+    image: influxdb:1.8.10
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./aggr-server/data/influxdb:/var/lib/influxdb/
+    networks:
+      - squeezeflow_network
+      - aggr_backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 4096M
+        reservations:
+          cpus: '0.3'
+          memory: 2048M
+
+  # Chronograf - InfluxDB Admin UI (ORIGINAL aus aggr-server/)
+  aggr-chronograf:
+    container_name: aggr-chronograf
+    image: chronograf:latest
+    restart: unless-stopped
+    volumes:
+      - ./aggr-server/data/chronograf:/var/lib/chronograf
+    ports:
+      - '8885:8888'
+    environment:
+      - 'INFLUXDB_URL=http://aggr-influx:8086'
+    depends_on:
+      - aggr-influx
+    networks:
+      - squeezeflow_network
+      - aggr_backend
+
+  # Open Interest Tracker
+  oi-tracker:
+    container_name: squeezeflow-oi-tracker
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.oi-tracker
+    restart: unless-stopped
+    environment:
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - aggr-influx
+    networks:
+      - squeezeflow_network
+
+  # SqueezeFlow Calculator Service
+  squeezeflow-calculator:
+    container_name: squeezeflow-calculator
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    restart: unless-stopped
+    environment:
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - INFLUX_USER=squeezeflow
+      - INFLUX_PASSWORD=password123
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - squeezeflow_network
+      - aggr_backend
+    external_links:
+      - aggr-influx
+
+  # Freqtrade with FreqAI
+  freqtrade:
+    container_name: squeezeflow-freqtrade
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.freqtrade
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - FREQTRADE_UI_PASSWORD=squeezeflow123
+    volumes:
+      - freqtrade_data:/freqtrade/user_data
+      - ./freqtrade/user_data:/freqtrade/user_data
+      - ./freqtrade/config:/freqtrade/config
+    depends_on:
+      - redis
+      - squeezeflow-calculator
+    networks:
+      - squeezeflow_network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Freqtrade UI (Optional)
+  freqtrade-ui:
+    container_name: squeezeflow-freqtrade-ui
+    image: freqtradeorg/frequi:latest
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+      - VITE_API_USERNAME=squeezeflow
+      - VITE_API_PASSWORD=squeezeflow123
+    depends_on:
+      - freqtrade
+    networks:
+      - squeezeflow_network
+
+  # System Monitor (Optional)
+  system-monitor:
+    container_name: squeezeflow-monitor
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor
+    restart: unless-stopped
+    environment:
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+    depends_on:
+      - aggr-influx
+    networks:
+      - squeezeflow_network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+
+  # Aggr.trade UI (Tucsky/aggr)
+  # aggr-ui:
+  #   container_name: squeezeflow-aggr-ui
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile.aggr-ui
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8082:8082"
+  #   environment:
+  #     - VITE_APP_API_URL=http://localhost:3001/
+  #     - VITE_APP_HISTORICAL_ENABLED=true
+  #   depends_on:
+  #     - aggr-server
+  #   networks:
+  #     - squeezeflow_network

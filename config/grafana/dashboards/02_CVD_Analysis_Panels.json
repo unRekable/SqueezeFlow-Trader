@@ -1,0 +1,559 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "description": "Individuelle CVD für ALLE SPOT Exchanges: BINANCE, BINANCE_US, BITFINEX, BITGET, BITMART, BITSTAMP, HUOBI",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Individual SPOT CVD",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BINANCE.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FFD700",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BINANCE_US.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF8C00",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITFINEX.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#00CED1",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITGET.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#9370DB",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITMART.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF69B4",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITSTAMP.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#00FF7F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "HUOBI.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF4500",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min",
+            "mean",
+            "stdDev"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BINANCE SPOT\" FROM trades_1m WHERE market =~ /BINANCE:$coin_pair.*usd.*/ AND market !~ /FUTURES/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BINANCE_US SPOT\" FROM trades_1m WHERE market =~ /BINANCE_US:$coin_pair.*usd.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITFINEX SPOT\" FROM trades_1m WHERE market =~ /BITFINEX:.*$coin_pair.*USD.*/ AND market !~ /F0:USTF0/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITGET SPOT\" FROM trades_1m WHERE market =~ /BITGET:$coin_pair.*USD.*/ AND market !~ /UMCBL/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITMART SPOT\" FROM trades_1m WHERE market =~ /BITMART:.*$coin_pair.*USD.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITSTAMP SPOT\" FROM trades_1m WHERE market =~ /BITSTAMP:$coin_pair.*usd.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"HUOBI SPOT\" FROM trades_1m WHERE market =~ /HUOBI:$coin_pair.*usd.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "G"
+        }
+      ],
+      "title": "📈 Individual SPOT CVD - ALL Major Exchanges Breakdown",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "description": "Individuelle CVD für ALLE PERP/FUTURES Exchanges: BINANCE_FUTURES, BITGET_UMCBL, BITFINEX Perps, BITMEX",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Individual PERP CVD",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BINANCE_FUTURES.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF0000",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITGET_UMCBL.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#8B0000",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITFINEX_PERP.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#DC143C",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "BITMEX.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF6347",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "min",
+            "mean",
+            "stdDev"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BINANCE_FUTURES\" FROM trades_1m WHERE market =~ /BINANCE_FUTURES:$coin_pair.*usd.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITGET_UMCBL\" FROM trades_1m WHERE market =~ /BITGET:$coin_pair.*UMCBL.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITFINEX_PERP\" FROM trades_1m WHERE market =~ /BITFINEX:.*$coin_pair.*F0:USTF0.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P951FEA4DE68E13C5"
+          },
+          "query": "SELECT mean(vbuy) - mean(vsell) AS \"BITMEX PERP\" FROM trades_1m WHERE market =~ /BITMEX:.*$coin_pair.*USD.*/ AND time > $timerange GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "refId": "D"
+        }
+      ],
+      "title": "📉 Individual PERP/FUTURES CVD - ALL Major Exchanges Breakdown",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "squeezeflow",
+    "cvd",
+    "analysis",
+    "all-exchanges",
+    "individual"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "btc",
+          "value": "btc"
+        },
+        "description": "🪙 Select cryptocurrency pair for detailed analysis",
+        "hide": 0,
+        "includeAll": false,
+        "label": "🪙 Coin Pair",
+        "multi": false,
+        "name": "coin_pair",
+        "options": [
+          {
+            "selected": true,
+            "text": "btc",
+            "value": "btc"
+          },
+          {
+            "selected": false,
+            "text": "eth",
+            "value": "eth"
+          }
+        ],
+        "query": "btc,eth",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "now() - 4h",
+          "value": "now() - 4h"
+        },
+        "description": "⏰ Select time range for detailed analysis",
+        "hide": 0,
+        "includeAll": false,
+        "label": "⏰ Time Range",
+        "multi": false,
+        "name": "timerange",
+        "options": [
+          {
+            "selected": false,
+            "text": "1h",
+            "value": "now() - 1h"
+          },
+          {
+            "selected": true,
+            "text": "4h",
+            "value": "now() - 4h"
+          },
+          {
+            "selected": false,
+            "text": "24h",
+            "value": "now() - 24h"
+          },
+          {
+            "selected": false,
+            "text": "7d",
+            "value": "now() - 7d"
+          },
+          {
+            "selected": false,
+            "text": "30d",
+            "value": "now() - 30d"
+          }
+        ],
+        "query": "1h : now() - 1h,4h : now() - 4h,24h : now() - 24h,7d : now() - 7d,30d : now() - 30d",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-4h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "",
+  "title": "📊 CVD Analysis Panels - ALL Exchange Deep Dive",
+  "uid": "cvd-analysis-all-exchanges",
+  "version": 1,
+  "weekStart": ""
+}

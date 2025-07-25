@@ -1,0 +1,8 @@
+features:
+  advanced_risk_management: true
+  backtesting: true
+  ml_predictions: false
+  multi_timeframe_analysis: true
+  paper_trading: true
+  telegram_notifications: false
+  web_dashboard: true

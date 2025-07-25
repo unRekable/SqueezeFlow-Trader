@@ -1,0 +1,26 @@
+FROM freqtradeorg/freqtrade:stable_freqai
+
+USER root
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    python3-dev \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install wheel
+RUN pip install wheel
+
+# Copy requirements and install dependencies
+COPY freqtrade/user_data/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+# Fix numpy compatibility issues with pandas-ta
+RUN pip install --upgrade --force-reinstall 'numpy<2.0.0'
+
+# Switch back to ftuser for security
+USER ftuser
+
+# Default command
+CMD ["trade", "--config", "/freqtrade/config/config.json", "--strategy", "SqueezeFlowFreqAI", "--logfile", "/freqtrade/user_data/logs/freqtrade.log"]

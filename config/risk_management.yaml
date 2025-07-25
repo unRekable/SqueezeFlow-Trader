@@ -1,0 +1,15 @@
+position_sizing:
+  max_position_size: 0.02
+  max_total_exposure: 0.1
+  min_position_size: 0.001
+risk_limits:
+  max_consecutive_losses: 5
+  max_daily_loss: 0.05
+  max_drawdown: 0.15
+stop_loss:
+  default_pct: 0.02
+  enabled: true
+  max_pct: 0.05
+take_profit:
+  default_pct: 0.04
+  enabled: false

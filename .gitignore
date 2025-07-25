@@ -1,0 +1,281 @@
+# SqueezeFlow Trader - Git Ignore Configuration
+
+# ==============================================
+# SYSTEM AND ENVIRONMENT FILES
+# ==============================================
+
+# Environment Variables (API Keys, Credentials)
+.env
+.env.local
+.env.production
+.env.development
+*.env
+
+# Python Environment
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==============================================
+# ARCHIVED AND BACKUP FILES
+# ==============================================
+
+# Archived Directory (old files and backups)
+Archived/
+archived/
+backup/
+backups/
+*.backup
+*.bak
+*.old
+
+# Temporary Files
+*.tmp
+*.temp
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==============================================
+# DATA AND DATABASES
+# ==============================================
+
+# InfluxDB Data
+data/influxdb/
+aggr-server/data/influxdb/
+
+# Grafana Data
+data/grafana/
+config/grafana/provisioning/dashboards/*.json
+
+# Redis Data
+data/redis/
+*.rdb
+
+# SQLite Databases
+*.sqlite
+*.sqlite3
+*.db
+
+# FreqTrade Data
+freqtrade/user_data/data/
+freqtrade/user_data/backtest_results/
+freqtrade/user_data/hyperopt_results/
+freqtrade/user_data/models/
+freqtrade/user_data/plot/
+*.feather
+
+# ==============================================
+# LOGS AND MONITORING
+# ==============================================
+
+# Log Files
+logs/
+data/logs/
+freqtrade/user_data/logs/
+*.log
+*.log.*
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# ==============================================
+# MACHINE LEARNING AND MODELS
+# ==============================================
+
+# ML Models and Training Data
+models/
+*.pkl
+*.joblib
+*.h5
+*.model
+*.onnx
+
+# Training Results
+state/
+backtest_results_*.json
+
+# ==============================================
+# DOCKER AND CONTAINERS
+# ==============================================
+
+# Docker Volumes
+docker-data/
+docker/data/
+
+# Container Logs
+**/logs/
+
+# ==============================================
+# DEVELOPMENT AND IDE
+# ==============================================
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# PyCharm
+.idea/
+
+# Jupyter
+.jupyter/
+
+# ==============================================
+# NODE.JS (aggr-server)
+# ==============================================
+
+# Node Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node Build
+aggr-server/dist/
+aggr-server/build/
+
+# ==============================================
+# SYSTEM SPECIFIC
+# ==============================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ==============================================
+# SECURITY AND CREDENTIALS
+# ==============================================
+
+# API Keys and Secrets
+**/api_keys.json
+**/credentials.json
+**/secrets.yaml
+**/private_key*
+**/certificate*
+
+# SSL Certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# ==============================================
+# PERFORMANCE AND MONITORING
+# ==============================================
+
+# Performance Data
+*.prof
+*.trace
+
+# Coverage Reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# ==============================================
+# DOCUMENTATION BUILDS
+# ==============================================
+
+# Sphinx Documentation
+docs/_build/
+
+# ==============================================
+# PACKAGE MANAGERS
+# ==============================================
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# ==============================================
+# FREQTRADE SPECIFIC
+# ==============================================
+
+# FreqTrade Specific Ignores
+freqtrade/user_data/tradesv3.sqlite*
+freqtrade/user_data/dry_run_db/
+freqtrade/user_data/*.sqlite-*
+
+# ==============================================
+# CUSTOM TRADING DATA
+# ==============================================
+
+# Large Data Files
+*.csv.gz
+*.parquet
+large_data/
+
+# Trading Results
+trading_results/
+performance_reports/
+
+# ==============================================
+# TESTING
+# ==============================================
+
+# Test Results
+.tox/
+.nox/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ==============================================
+# END OF GITIGNORE
+# ==============================================

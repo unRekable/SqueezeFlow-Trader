@@ -1,0 +1,190 @@
+{
+    "max_open_trades": 2,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.99,
+    "fiat_display_currency": "USD",
+    "timeframe": "1m",
+    "dry_run": true,
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "cancel_open_orders_on_exit": false,
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": false,
+        "order_book_top": 1
+    },
+    "unfilledtimeout": {
+        "entry": 5,
+        "exit": 5,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "order_types": {
+        "entry": "market",
+        "exit": "market",
+        "emergency_exit": "market",
+        "force_entry": "market",
+        "force_exit": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": false,
+        "stoploss_on_exchange_interval": 60
+    },
+    "order_time_in_force": {
+        "entry": "GTC",
+        "exit": "GTC"
+    },
+    "exchange": {
+        "name": "bybit",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "options": {
+                "defaultType": "swap"
+            },
+            "sandbox": false
+        },
+        "pair_whitelist": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT"
+        ],
+        "pair_blacklist": [],
+        "markets_refresh_interval": 60
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "edge": {
+        "enabled": false,
+        "process_throttle_secs": 3600,
+        "calculate_since_number_of_days": 7,
+        "allowed_risk": 0.01,
+        "stoploss_range_min": -0.01,
+        "stoploss_range_max": -0.1,
+        "stoploss_range_step": -0.01,
+        "minimum_winrate": 0.60,
+        "minimum_expectancy": 0.20,
+        "min_trade_number": 10,
+        "max_trade_duration_minute": 1440,
+        "remove_pumps": false
+    },
+    "discord": {
+        "enabled": true,
+        "webhook_url": "https://discord.com/api/webhooks/1389693480099381328/3BsmwVb1NhGLIe6nAHgx3VgApRNqwWANrLn8ZdBfesZdEPJuB-EG40HWD3nDET9nXuWR",
+        "format": "json"
+    },
+    "telegram": {
+        "enabled": false,
+        "token": "",
+        "chat_id": ""
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8080,
+        "verbosity": "error",
+        "enable_openapi": false,
+        "jwt_secret_key": "squeezeflow_jwt_secret_key_2025",
+        "CORS_origins": [],
+        "username": "squeezeflow",
+        "password": "squeezeflow123"
+    },
+    "bot_name": "SqueezeFlow_FreqAI",
+    "initial_state": "running",
+    "force_entry_enable": true,
+    "internals": {
+        "process_throttle_secs": 5
+    },
+    "strategy": "SqueezeFlowFreqAI",
+    "strategy_path": "user_data/strategies",
+    "freqaimodel": "LightGBMRegressorMultiTarget",
+    "db_url": "sqlite:///user_data/tradesv3.sqlite",
+    "redis_url": "redis://redis:6379/0",
+    "freqai": {
+        "enabled": true,
+        "purge_old_models": 2,
+        "train_period_days": 3,
+        "backtest_period_days": 1,
+        "live_retrain_hours": 6,
+        "expiration_hours": 12,
+        "identifier": "SqueezeFlowFreqAI_DryRun",
+        "live_trained_timestamp": 0,
+        "data_kitchen_thread_count": 2,
+        "activate_tensorboard": false,
+        "feature_parameters": {
+            "include_timeframes": ["1m", "5m"],
+            "include_corr_pairlist": [],
+            "label_period_candles": 10,
+            "include_shifted_candles": 1,
+            "indicator_periods_candles": [10, 20, 50],
+            "DI_threshold": 0.7,
+            "weight_factor": 0.8,
+            "principal_component_analysis": false,
+            "use_SVM_to_remove_outliers": false,
+            "svm_params": {
+                "shuffle": false,
+                "nu": 0.1
+            },
+            "use_DBSCAN_to_remove_outliers": false,
+            "inlier_metric_window": 10,
+            "noise_standard_deviation": 0.1,
+            "outlier_protection_percentage": 20,
+            "reverse_train_test_order": false
+        },
+        "data_split_parameters": {
+            "test_size": 0.25,
+            "shuffle": false
+        },
+        "model_training_parameters": {
+            "n_estimators": 100,
+            "learning_rate": 0.05,
+            "max_depth": 6,
+            "min_child_weight": 5,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "random_state": 42,
+            "n_jobs": 2
+        },
+        "rl_config": {
+            "train_cycles": 10,
+            "max_training_drawdown_pct": 0.05,
+            "model_type": "PPO",
+            "policy_type": "MlpPolicy",
+            "model_reward_parameters": {
+                "rr": 1,
+                "profit_aim": 0.02,
+                "win_reward_factor": 1.5
+            }
+        }
+    },
+    "freqai_backtest_live_models": false,
+    "freqai_backtest_live_models_path": "",
+    "user_data_dir": "user_data",
+    "datadir": "user_data/data",
+    "log_level": "DEBUG",
+    "logfile": "user_data/logs/freqtrade.log",
+    "reduce_df_footprint": true,
+    "confirm_trades": {
+        "enabled": false,
+        "allow_increasing": true,
+        "max_trade_stake": 0,
+        "min_trade_stake": 0
+    },
+    "webhook": {
+        "enabled": false,
+        "url": "",
+        "format": "json"
+    }
+}

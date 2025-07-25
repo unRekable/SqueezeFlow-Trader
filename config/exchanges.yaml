@@ -1,0 +1,19 @@
+binance:
+  api_key: ''
+  api_secret: ''
+  enabled: true
+  rate_limit: 1200
+  testnet: true
+bybit:
+  api_key: ''
+  api_secret: ''
+  enabled: true
+  rate_limit: 120
+  testnet: true
+okx:
+  api_key: ''
+  api_secret: ''
+  enabled: true
+  passphrase: ''
+  rate_limit: 60
+  testnet: true
