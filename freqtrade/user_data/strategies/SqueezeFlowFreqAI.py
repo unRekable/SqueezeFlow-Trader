@@ -42,7 +42,7 @@ class SqueezeFlowFreqAI(IStrategy):
     
     # Freqtrade settings
     can_short = True
-    use_exit_signal = True  # Aktiviert für automatisches Signal-basiertes Trading
+    use_exit_signal = True  # Enable automatic signal-based trading
     exit_profit_only = False
     ignore_roi_if_entry_signal = True
     
@@ -53,7 +53,7 @@ class SqueezeFlowFreqAI(IStrategy):
     startup_candle_count = 120
     
     # Strategy parameters
-    squeeze_threshold = DecimalParameter(0.3, 0.8, default=0.5, space="buy")  # Erhöht von 0.2 auf 0.5 für weniger Noise-Trades
+    squeeze_threshold = DecimalParameter(0.3, 0.8, default=0.5, space="buy")  # Increased from 0.2 to 0.5 for fewer noise trades
     rsi_oversold = IntParameter(20, 40, default=30, space="buy")
     rsi_overbought = IntParameter(60, 80, default=70, space="sell")
     volume_threshold = DecimalParameter(1.1, 2.0, default=1.5, space="buy")
@@ -79,10 +79,10 @@ class SqueezeFlowFreqAI(IStrategy):
         self.setup_redis_connection()
         
         # SIGNAL PERSISTENCE SYSTEM
-        self.signal_cache = {}  # Persistente Signal-Speicherung
-        self.entry_signals = {}  # Entry-Tracking für Timing und Direction
+        self.signal_cache = {}  # Persistent signal storage
+        self.entry_signals = {}  # Entry tracking for timing and direction
         self.last_signal_update = {}
-        self.active_positions = {}  # Track welche Position-Richtung aktiv ist
+        self.active_positions = {}  # Track which position direction is active
         
     def setup_redis_connection(self):
         """Setup Redis connection for external signals"""
@@ -97,7 +97,7 @@ class SqueezeFlowFreqAI(IStrategy):
             
     def get_external_squeeze_signals(self, pair: str, timeframe: str = '1m') -> Dict:
         """
-        Get external squeeze signals with PERSISTENCE - Lösung für Timing-Problem
+        Get external squeeze signals with PERSISTENCE - Solution for timing problem
         """
         if not self.redis_client:
             logger.warning(f"🔴 Redis client not available for {pair}")
@@ -129,7 +129,7 @@ class SqueezeFlowFreqAI(IStrategy):
             # SIGNAL PERSISTENCE LOGIC
             current_score = current_signals.get('squeeze_score_20', 0)
             
-            # Initialisiere Cache für dieses Pair
+            # Initialize cache for this pair
             if pair not in self.signal_cache:
                 self.signal_cache[pair] = {
                     'score': 0, 
@@ -141,7 +141,7 @@ class SqueezeFlowFreqAI(IStrategy):
             
             cache = self.signal_cache[pair]
             
-            # ENTRY LOGIC: Neues starkes Signal erkannt ODER Signal-Refresh
+            # ENTRY LOGIC: New strong signal detected OR signal refresh
             if abs(current_score) > 0.15:
                 if not cache['active']:
                     # Komplett neues Signal
@@ -151,24 +151,24 @@ class SqueezeFlowFreqAI(IStrategy):
                     cache['strength'] = current_signals.get('signal_strength_20', 0)
                     cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
                     
-                    # Entry-Signal speichern für Timing
+                    # Save entry signal for timing
                     self.entry_signals[pair] = cache.copy()
                     
                     logger.info(f"🎯 NEW SIGNAL ACTIVATED {symbol}: score={current_score:.3f}, type={cache['type']}")
                     
-                elif abs(current_score) > abs(cache['score']) * 1.5:  # Signal 50% stärker
-                    # Signal-Refresh: Starkes neues Signal überschreibt altes
+                elif abs(current_score) > abs(cache['score']) * 1.5:  # Signal 50% stronger
+                    # Signal refresh: Strong new signal overrides old one
                     cache['score'] = current_score
                     cache['timestamp'] = datetime.now()  # REFRESH TIMESTAMP!
                     cache['strength'] = current_signals.get('signal_strength_20', 0)
                     cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
                     
-                    # Entry-Signal refreshen für Timing
+                    # Refresh entry signal for timing
                     self.entry_signals[pair] = cache.copy()
                     
                     logger.info(f"🔄 SIGNAL REFRESHED {symbol}: score={current_score:.3f} (was {cache['score']:.3f}), type={cache['type']}")
                 
-            # EXIT LOGIC: Signal schwächt sich stark ab
+            # EXIT LOGIC: Signal weakens significantly
             elif abs(current_score) < 0.1 and cache['active']:
                 cache['active'] = False
                 logger.info(f"🔄 SIGNAL DEACTIVATED {symbol}: score dropped to {current_score:.3f}")
@@ -179,7 +179,7 @@ class SqueezeFlowFreqAI(IStrategy):
                 cache['strength'] = current_signals.get('signal_strength_20', 0)
                 cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
             
-            # RETURN: Verwende persistierte Signale für aktive, sonst aktuelle
+            # RETURN: Use persisted signals for active ones, otherwise current
             if cache['active']:
                 # Aktives Signal: Verwende Cache-Werte
                 return_signals = current_signals.copy()
@@ -499,16 +499,16 @@ class SqueezeFlowFreqAI(IStrategy):
             (signal_active == True),  # Signal muss aktiv sein
             (signal_age < 5),  # Signal max 5 Minuten alt
             # CONFIRMATION: Multiple timeframe alignment mit erweiterten Timeframes
-            # Entry-Timing: 10min oder 30min Bestätigung
+            # Entry timing: 10min or 30min confirmation
             ((dataframe['squeeze_score_10'] <= -0.15) | (dataframe['squeeze_score_30'] <= -0.2)),  # Entry timing
-            # Primäre Timeframes: 1h+ Signal für echte Squeeze-Bestätigung - AKTIVIERT!
-            ((dataframe['squeeze_score_60'] <= -0.15) | (dataframe['squeeze_score_120'] <= -0.1) | (dataframe['squeeze_score_240'] <= -0.05)),  # 1h,2h,4h Trend-Bestätigung
+            # Primary timeframes: 1h+ signal for real squeeze confirmation - ACTIVATED!
+            ((dataframe['squeeze_score_60'] <= -0.15) | (dataframe['squeeze_score_120'] <= -0.1) | (dataframe['squeeze_score_240'] <= -0.05)),  # 1h,2h,4h trend confirmation
             # FILTER: Basic technical conditions
             (dataframe['rsi'] < self.rsi_overbought.value),
             (dataframe['volume'] > dataframe['volume_sma'] * self.volume_threshold.value),
-            # OI confirmation - Falls verfügbar
-            (dataframe['oi_normalized'] > 0.8),  # Weniger restriktiv
-            (dataframe['oi_momentum'] > -0.1)   # Weniger restriktiv
+            # OI confirmation - if available
+            (dataframe['oi_normalized'] > 0.8),  # Less restrictive
+            (dataframe['oi_momentum'] > -0.1)   # Less restrictive
         ]
         
         # Add FreqAI prediction as supportive signal (not blocking)
@@ -528,16 +528,16 @@ class SqueezeFlowFreqAI(IStrategy):
             (signal_active == True),  # Signal muss aktiv sein  
             (signal_age < 5),  # Signal max 5 Minuten alt
             # CONFIRMATION: Multiple timeframe alignment mit erweiterten Timeframes  
-            # Entry-Timing: 10min oder 30min Bestätigung
+            # Entry timing: 10min or 30min confirmation
             ((dataframe['squeeze_score_10'] >= 0.15) | (dataframe['squeeze_score_30'] >= 0.2)),  # Entry timing
-            # Primäre Timeframes: 1h+ Signal für echte Squeeze-Bestätigung - AKTIVIERT!
-            ((dataframe['squeeze_score_60'] >= 0.15) | (dataframe['squeeze_score_120'] >= 0.1) | (dataframe['squeeze_score_240'] >= 0.05)),  # 1h,2h,4h Trend-Bestätigung
+            # Primary timeframes: 1h+ signal for real squeeze confirmation - ACTIVATED!
+            ((dataframe['squeeze_score_60'] >= 0.15) | (dataframe['squeeze_score_120'] >= 0.1) | (dataframe['squeeze_score_240'] >= 0.05)),  # 1h,2h,4h trend confirmation
             # FILTER: Basic technical conditions
             (dataframe['rsi'] > self.rsi_oversold.value),
             (dataframe['volume'] > dataframe['volume_sma'] * self.volume_threshold.value),
-            # OI confirmation - Falls verfügbar
-            (dataframe['oi_normalized'] > 0.8),  # Weniger restriktiv
-            (dataframe['oi_momentum'] > -0.1)   # Weniger restriktiv
+            # OI confirmation - if available
+            (dataframe['oi_normalized'] > 0.8),  # Less restrictive
+            (dataframe['oi_momentum'] > -0.1)   # Less restrictive
         ]
         
         # Add FreqAI prediction as supportive signal (not blocking)
@@ -555,7 +555,7 @@ class SqueezeFlowFreqAI(IStrategy):
             
             # LONG ENTRY: Check conditions on latest candle only  
             if len(long_conditions) > 0:
-                # Prüfe alle Bedingungen für letzten Candle
+                # Check all conditions for latest candle
                 try:
                     latest_idx = dataframe.index[-1]
                     long_check = all([
@@ -630,7 +630,7 @@ class SqueezeFlowFreqAI(IStrategy):
         external_signals = self.get_external_squeeze_signals(pair)
         signal_active = external_signals.get('signal_active', False)
         
-        # Check if we have position timing info - SAFE CHECK für Race Condition
+        # Check if we have position timing info - SAFE CHECK for race condition
         has_position_timing = (pair in self.entry_signals and 
                              'entry_time' in self.entry_signals[pair])
         
@@ -640,12 +640,12 @@ class SqueezeFlowFreqAI(IStrategy):
                 position_age_minutes = (datetime.now() - entry_time).total_seconds() / 60
             except (KeyError, TypeError) as e:
                 logger.warning(f"Entry time not ready for {pair}: {e}, skipping exit logic")
-                return dataframe  # Exit early - kein Cleanup, da Entry gerade läuft
+                return dataframe  # Exit early - no cleanup, as entry is running
             
-            # EXIT CONDITIONS - SOFORTIGE EXITS bei Signal-Umkehr möglich
+            # EXIT CONDITIONS - IMMEDIATE EXITS possible on signal reversal
             # MINIMUM HOLD TIME ENTFERNT - Squeeze-Reversals brauchen sofortige Reaktion!
             
-            # Prüfe ob Signal für längere Zeit inaktiv (weniger nervös)
+            # Check if signal has been inactive for a longer time (less nervous)
             signal_inactive_duration = 0
             if pair in self.signal_inactive_start:
                 signal_inactive_duration = (datetime.now() - self.signal_inactive_start[pair]).total_seconds() / 60
@@ -656,26 +656,26 @@ class SqueezeFlowFreqAI(IStrategy):
                     self.signal_inactive_start[pair] = datetime.now()
                     signal_inactive_duration = 0
             else:
-                # Signal aktiv - Timer zurücksetzen
+                # Signal active - reset timer
                 if hasattr(self, 'signal_inactive_start') and pair in self.signal_inactive_start:
                     del self.signal_inactive_start[pair]
                 signal_inactive_duration = 0
             
-            # LONG EXIT CONDITIONS - SOFORTIGE EXITS möglich
+            # LONG EXIT CONDITIONS - IMMEDIATE EXITS possible
             long_exit_conditions = [
-                # 1. Signal-Umkehr: Starkes entgegengesetztes Signal (Short Squeeze) - verschärfter Threshold
-                dataframe['squeeze_score'].iloc[-1] > 1.0,  # Erhöht von 0.7 auf 1.0 für echte Reversals
-                # 2. Signal DAUERHAFT inaktiv mit stärkerem Filter
+                # 1. Signal reversal: Strong opposite signal (Short Squeeze) - stricter threshold
+                dataframe['squeeze_score'].iloc[-1] > 1.0,  # Increased from 0.7 to 1.0 for real reversals
+                # 2. Signal PERMANENTLY inactive with stronger filter
                 (signal_inactive_duration > 30 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.02),  # 30min + score < 0.02
                 # 3. Lange Position mit schwachem Signal (Emergency Exit)
                 (position_age_minutes > 120 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.05)  # 2h + sehr schwaches Signal
             ]
             
-            # SHORT EXIT CONDITIONS - SOFORTIGE EXITS möglich  
+            # SHORT EXIT CONDITIONS - IMMEDIATE EXITS possible  
             short_exit_conditions = [
-                # 1. Signal-Umkehr: Starkes entgegengesetztes Signal (Long Squeeze) - verschärfter Threshold
-                dataframe['squeeze_score'].iloc[-1] < -1.0,  # Erhöht von -0.7 auf -1.0 für echte Reversals
-                # 2. Signal DAUERHAFT inaktiv mit stärkerem Filter
+                # 1. Signal reversal: Strong opposite signal (Long Squeeze) - stricter threshold
+                dataframe['squeeze_score'].iloc[-1] < -1.0,  # Increased from -0.7 to -1.0 for real reversals
+                # 2. Signal PERMANENTLY inactive with stronger filter
                 (signal_inactive_duration > 30 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.02),  # 30min + score < 0.02
                 # 3. Lange Position mit schwachem Signal (Emergency Exit)
                 (position_age_minutes > 120 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.05)  # 2h + sehr schwaches Signal
@@ -683,26 +683,26 @@ class SqueezeFlowFreqAI(IStrategy):
                 
             logger.info(f"🔍 EXIT CONDITIONS {pair}: age={position_age_minutes:.1f}min, score={dataframe['squeeze_score'].iloc[-1]:.3f}, inactive_duration={signal_inactive_duration:.1f}min, conditions_count=long:{len(long_exit_conditions)}/short:{len(short_exit_conditions)}")
         else:
-            # FALLBACK: EMERGENCY EXIT ohne Position-Timing (nach Restart)
-            # Wenn Entry-Zeit verloren gegangen ist, nutze Signal-Status für Exit-Entscheidung
+            # FALLBACK: EMERGENCY EXIT without position timing (after restart)
+            # When entry time is lost, use signal status for exit decision
             logger.warning(f"🚨 EMERGENCY EXIT {pair}: No position timing available, using signal-based fallback")
             
-            # Nach Restart: Wenn Signal inaktiv ist, sollten wir aussteigen
+            # After restart: Exit only if signal completely inactive or very weak
             emergency_exit_conditions = [
-                # 1. Signal komplett inaktiv - SOFORTIGER EXIT
+                # 1. Signal completely inactive - IMMEDIATE EXIT
                 (not signal_active and abs(dataframe['squeeze_score'].iloc[-1]) < 0.1),
-                # 2. Signal-Umkehr - auch ohne Timing info
-                (dataframe['squeeze_score'].iloc[-1] > 0.5),  # Long exit für Short Position
-                (dataframe['squeeze_score'].iloc[-1] < -0.5)  # Short exit für Long Position
+                # 2. Very weak signal indicates no clear direction
+                (signal_active and abs(dataframe['squeeze_score'].iloc[-1]) < 0.05)
             ]
             
-            # Anwenden auf beide Richtungen (da wir nicht wissen, ob Long oder Short)
+            # Apply same basic emergency conditions to both directions
+            # We avoid directional exits since we don't know the actual position direction
             long_exit_conditions = emergency_exit_conditions
             short_exit_conditions = emergency_exit_conditions
             
             logger.warning(f"⚠️ EMERGENCY EXIT {pair}: signal_active={signal_active}, score={dataframe['squeeze_score'].iloc[-1]:.3f}, emergency_conditions={len(emergency_exit_conditions)}")
         
-        # Add FreqAI exit signals if enabled - Fixed für pandas Series
+        # Add FreqAI exit signals if enabled - Fixed for pandas Series
         if self.use_freqai.value and '&-s-up_or_down' in dataframe.columns:
             try:
                 freqai_long_exit = (
@@ -718,7 +718,7 @@ class SqueezeFlowFreqAI(IStrategy):
             except Exception as e:
                 logger.debug(f"FreqAI exit conditions not available: {e}")
         
-        # Set exit signals - NUR FÜR AKTIVE POSITION-RICHTUNG
+        # Set exit signals - ONLY FOR ACTIVE POSITION DIRECTION
         try:
             latest_idx = dataframe.index[-1]
             active_direction = self.active_positions.get(pair, None)
@@ -883,16 +883,16 @@ class SqueezeFlowFreqAI(IStrategy):
                 proposed_leverage: float, max_leverage: float, entry_tag: str | None, 
                 side: str, **kwargs) -> float:
         """
-        Set leverage for futures trading - Squeeze-Strategie mit höherer Leverage
+        Set leverage for futures trading - Squeeze strategy with higher leverage
         """
         # Debug logging
         logger.info(f"🔍 LEVERAGE CALL {pair}: proposed={proposed_leverage}, max={max_leverage}, tag={entry_tag}, side={side}")
         
-        # Squeeze-Signale sind präzise → höhere Leverage gerechtfertigt
+        # Squeeze signals are precise → higher leverage justified
         if entry_tag == "force_entry":
-            leverage_value = 5.0  # Höhere Leverage für manuelle Tests
+            leverage_value = 5.0  # Higher leverage for manual tests
         else:
-            leverage_value = 5.0  # Aggressive Leverage für Squeeze-Trades (da hohe Präzision)
+            leverage_value = 5.0  # Aggressive leverage for squeeze trades (due to high precision)
             
         logger.info(f"🚀 LEVERAGE SET {pair}: returning {leverage_value}x (was proposed: {proposed_leverage}x)")
         return leverage_value
