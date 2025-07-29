@@ -273,6 +273,9 @@ agents/
 *.agent
 agent_logs/
 
+# Backtest Results and Temporary Output
+backtest/results/
+
 # ==============================================
 # TESTING
 # ==============================================

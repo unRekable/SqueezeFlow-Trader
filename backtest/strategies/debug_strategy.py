@@ -14,9 +14,9 @@ from typing import Dict, List, Optional, Tuple
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from ..strategy import BaseStrategy, TradingSignal, SignalStrength
+    from ..core.strategy import BaseStrategy, TradingSignal, SignalStrength
 except ImportError:
-    from core.strategy import BaseStrategy, TradingSignal, SignalStrength
+    from backtest.core.strategy import BaseStrategy, TradingSignal, SignalStrength
 
 class DebugStrategy(BaseStrategy):
     """Debug strategy with very relaxed thresholds to test signal generation"""

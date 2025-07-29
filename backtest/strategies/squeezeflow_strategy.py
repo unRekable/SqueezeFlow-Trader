@@ -20,11 +20,11 @@ from influxdb import InfluxDBClient
 
 # Import base strategy class
 try:
-    from ..strategy import BaseStrategy, TradingSignal, SignalStrength
-    from ..strategy_logger import create_strategy_logger
+    from ..core.strategy import BaseStrategy, TradingSignal, SignalStrength
+    from ..strategy_logging.strategy_logger import create_strategy_logger
 except ImportError:
-    from backtest.strategy import BaseStrategy, TradingSignal, SignalStrength
-    from backtest.strategy_logger import create_strategy_logger
+    from backtest.core.strategy import BaseStrategy, TradingSignal, SignalStrength
+    from backtest.strategy_logging.strategy_logger import create_strategy_logger
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ class SqueezeFlowStrategy(BaseStrategy):
             
             # Exit parameters (relative to baseline)
             'flow_reversal_relative_threshold': 25_000_000,  # 25M delta divergence for flow reversal
-            'range_break_buffer': 0.001,                    # 0.1% buffer for range breaks
+            'range_break_buffer': 0.005,                    # 0.5% buffer for significant range breaks
             
             # Data requirements
             'min_data_points': 240,                         # Minimum data required
@@ -537,6 +537,10 @@ class SqueezeFlowStrategy(BaseStrategy):
                                      f"volatility_decline={volatility_decline}, "
                                      f"reset_detected={reset_detected}")
             
+            # Store reset range for proper entry range calculation
+            reset_range_low = price.rolling(10).min().iloc[-1] if len(price) >= 10 else price.min()
+            reset_range_high = price.rolling(10).max().iloc[-1] if len(price) >= 10 else price.max()
+            
             return {
                 'reset_detected': reset_detected,
                 'gap_reduction': convergence_ratio,  # Now represents convergence ratio, not percentage
@@ -546,7 +550,9 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'convergence_detected': convergence_detected,
                 'price_movement_met': price_movement,
                 'convergence_ratio': convergence_ratio,
-                'gap_reduction_magnitude': gap_reduction_magnitude
+                'gap_reduction_magnitude': gap_reduction_magnitude,
+                'reset_range_low': reset_range_low,
+                'reset_range_high': reset_range_high
             }
             
         except Exception as e:
@@ -640,11 +646,10 @@ class SqueezeFlowStrategy(BaseStrategy):
                 # Update state to in position
                 self.state = SqueezeFlowState.IN_POSITION
                 
-                # Store entry range for proper range break detection
-                price_series = lookback_data['price']
-                range_lookback = 10
-                entry_range_low = price_series.rolling(range_lookback).min().iloc[-1]
-                entry_range_high = price_series.rolling(range_lookback).max().iloc[-1]
+                # Store entry range using reset range (Documentation compliance)
+                # Per SqueezeFlow.md: "entry range/reset low" - use reset range, not rolling range
+                entry_range_low = reset_data.get('reset_range_low', lookback_data['price'].iloc[-1] * 0.98)
+                entry_range_high = reset_data.get('reset_range_high', lookback_data['price'].iloc[-1] * 1.02)
                 
                 self.position_data = {
                     'entry_price': lookback_data['price'].iloc[-1],
@@ -653,7 +658,9 @@ class SqueezeFlowStrategy(BaseStrategy):
                     'signal_strength': signal_strength,
                     'signal_type': signal_type,
                     'entry_range_low': entry_range_low,
-                    'entry_range_high': entry_range_high
+                    'entry_range_high': entry_range_high,
+                    'reset_range_low': reset_data.get('reset_range_low'),
+                    'reset_range_high': reset_data.get('reset_range_high')
                 }
                 
                 return TradingSignal(

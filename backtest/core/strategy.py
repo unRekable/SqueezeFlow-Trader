@@ -342,11 +342,11 @@ if PRODUCTION_STRATEGY_AVAILABLE:
 
 # Import debug strategy
 try:
-    from .strategies.debug_strategy import DebugStrategy
+    from ..strategies.debug_strategy import DebugStrategy
     DEBUG_STRATEGY_AVAILABLE = True
 except ImportError:
     try:
-        from strategies.debug_strategy import DebugStrategy
+        from backtest.strategies.debug_strategy import DebugStrategy
         DEBUG_STRATEGY_AVAILABLE = True
     except ImportError:
         DEBUG_STRATEGY_AVAILABLE = False
@@ -390,11 +390,11 @@ if WORKING_SQUEEZE_AVAILABLE:
 
 # Import new comprehensive SqueezeFlow strategy
 try:
-    from .strategies.squeezeflow_strategy import SqueezeFlowStrategy as NewSqueezeFlowStrategy
+    from ..strategies.squeezeflow_strategy import SqueezeFlowStrategy as NewSqueezeFlowStrategy
     NEW_SQUEEZEFLOW_AVAILABLE = True
 except ImportError:
     try:
-        from strategies.squeezeflow_strategy import SqueezeFlowStrategy as NewSqueezeFlowStrategy
+        from backtest.strategies.squeezeflow_strategy import SqueezeFlowStrategy as NewSqueezeFlowStrategy
         NEW_SQUEEZEFLOW_AVAILABLE = True
     except ImportError:
         NEW_SQUEEZEFLOW_AVAILABLE = False

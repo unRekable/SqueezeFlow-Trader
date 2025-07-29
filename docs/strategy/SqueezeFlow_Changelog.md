@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.6] - 2025-07-29
+
+### Fixed
+- **Entry Range Calculation Fix** - Corrected entry range to use reset range per SqueezeFlow.md documentation
+  - **Issue**: Entry range used rolling 10-period price range instead of actual reset range
+  - **Documentation Violation**: SqueezeFlow.md Line 107 specifies "entry range/reset low" - linking entry to reset
+  - **Fix**: Modified `_generate_entry_signal()` to use reset range from Phase 3 detection
+  - **Implementation Changes**:
+    - Added `reset_range_low` and `reset_range_high` to `_detect_cvd_reset()` return data
+    - Updated entry signal generation to use `reset_data.get('reset_range_low/high')` for position storage
+    - Maintained fallback values for safety (2% price buffer if reset data missing)
+  - **Compliance**: Now properly implements "entry range/reset low" methodology from documentation
+  - **Expected Impact**: Range break detection will use correct reset-based range instead of arbitrary rolling range
+
+- **Range Break Buffer Optimization** - Increased buffer from 0.1% to 0.5% for significant range breaks
+  - **Issue**: 0.1% buffer too sensitive, causing premature exits on normal market movement
+  - **Evidence**: Recent trade exited on 0.15% price movement (-0.4% loss), well within normal market noise
+  - **Documentation Support**: SqueezeFlow.md Line 158 emphasizes "significantly" breaking entry range
+  - **Fix**: Increased `range_break_buffer` from 0.001 (0.1%) to 0.005 (0.5%)
+  - **Implementation**: Updated strategy configuration default value
+  - **Rationale**: 0.5% threshold better aligns with "significant" range breaks vs minor price fluctuations
+  - **Expected Impact**: Reduced false exits from normal market movement, better flow-following behavior
+
 ## [1.3.5] - 2025-07-28
 
 ### Fixed
