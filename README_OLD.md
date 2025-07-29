@@ -40,7 +40,7 @@ Exchange APIs → aggr-server → InfluxDB → Multi-Timeframe CQs → Symbol/Ma
 │   ├── portfolio.py             # Portfolio & position management
 │   └── fees.py                  # Realistic trading cost calculations
 ├── strategies/                  # Trading strategy implementations
-│   ├── squeezeflow_strategy.py  # Complete SqueezeFlow methodology (58KB)
+│   ├── squeezeflow_strategy.py  # Complete SqueezeFlow methodology
 │   └── debug_strategy.py        # Debug/testing strategies
 ├── analysis/                    # Data analysis frameworks
 │   └── cvd_data_analyzer.py     # CVD pattern analysis tools
@@ -104,8 +104,8 @@ For complete strategy documentation, see [`docs/strategy/SqueezeFlow.md`](docs/s
 ### 1. System Setup
 ```bash
 # Clone repository
-git clone https://github.com/your-username/SqueezeFlow-Trader.git
-cd SqueezeFlow-Trader
+git clone https://github.com/your-username/SqueezeFlow-Trader-2.git
+cd SqueezeFlow-Trader-2
 
 # Initialize system with environment detection
 python init.py --mode development
@@ -127,9 +127,9 @@ python status.py
 ```
 
 ### 3. Access Interfaces
+- **Grafana Dashboards**: http://localhost:3002 (admin/admin)
 - **FreqTrade UI**: http://localhost:8081  
 - **aggr-server Data**: http://localhost:3000
-- **Chronograf (InfluxDB Admin)**: http://localhost:8885
 - **System Logs**: `data/logs/squeezeflow.log`
 
 ## 🧪 Testing & Validation
@@ -225,7 +225,7 @@ def calculate_cvd(price_data, volume_data):
 
 ### Real Market Coverage
 - **Multi-Exchange Support**: 24+ exchanges via aggr-server integration
-- **Current Pairs**: BTC/USDT, ETH/USDT (expandable to additional pairs)  
+- **Current Pairs**: BTC/USDT, ETH/USDT (expandable to additional pairs)
 - **Symbol Discovery**: Database-driven detection of available trading pairs
 - **Data Quality**: Minimum thresholds with coverage validation
 
@@ -268,16 +268,13 @@ cvd_analysis:
   convergence_threshold: 0.6    # CVD convergence detection
   reset_detection: true         # Enable reset pattern recognition
 
-# Risk Management (configured via /config/risk_management.yaml)
-position_sizing:
-  max_position_size: 0.02       # 2% maximum per position
+# Risk Management (integrated with portfolio system)
+position_management:
+  max_position_size: 0.02       # 2% per position (default risk limit)
+  max_open_positions: 2         # Maximum concurrent positions
   max_total_exposure: 0.1       # 10% total portfolio exposure
-  min_position_size: 0.001      # 0.1% minimum per position
-
-risk_limits:
-  max_consecutive_losses: 5     # Maximum consecutive losses  
-  max_daily_loss: 0.05         # 5% maximum daily loss
-  max_drawdown: 0.15           # 15% maximum drawdown
+  stop_loss_percentage: 0.025   # 2.5% stop loss
+  take_profit_percentage: 0.04  # 4% take profit target
 ```
 
 ## 🐳 Docker Deployment
@@ -289,11 +286,11 @@ python init.py --mode production
 ./start.sh
 
 # Individual service management
-docker-compose up -d aggr-influx squeezeflow-redis    # Data infrastructure
-docker-compose up -d aggr-server                      # Data collection
-docker-compose up -d squeezeflow-calculator           # Signal generation
-docker-compose up -d squeezeflow-freqtrade squeezeflow-freqtrade-ui  # Trading execution
-docker-compose up -d squeezeflow-monitor               # Monitoring
+docker-compose up -d aggr-influx redis            # Data infrastructure
+docker-compose up -d aggr-server                  # Data collection
+docker-compose up -d squeezeflow-calculator       # Signal generation
+docker-compose up -d freqtrade freqtrade-ui       # Trading execution
+docker-compose up -d grafana system-monitor       # Monitoring
 
 # Service health monitoring
 docker-compose logs -f squeezeflow-calculator
@@ -304,15 +301,15 @@ docker stats
 ```yaml
 # 9 containerized microservices
 services:
-  aggr-influx:           # InfluxDB 1.8.10 - Time-series database
-  aggr-server:           # Node.js - Real-time data collection from 24+ exchanges
-  squeezeflow-redis:     # Redis 7-alpine - Caching and message queue
+  aggr-influx:      # InfluxDB 1.8.10 - Time-series database
+  aggr-server:      # Node.js - Real-time data collection
+  redis:            # Redis 7-alpine - Caching and message queue
   squeezeflow-calculator: # Core signal generation service
-  squeezeflow-freqtrade: # Trading engine with FreqAI integration
-  squeezeflow-freqtrade-ui: # Web interface for trading management
-  squeezeflow-oi-tracker: # Open Interest tracking service
-  squeezeflow-monitor:   # System health monitoring
-  aggr-chronograf:       # InfluxDB admin interface
+  freqtrade:        # Trading engine with FreqAI integration
+  freqtrade-ui:     # Web interface for trading management
+  oi-tracker:       # Open Interest tracking service
+  system-monitor:   # System health monitoring
+  grafana:          # Monitoring dashboards and visualizations
 ```
 
 ## 📊 Performance & Monitoring
@@ -320,7 +317,7 @@ services:
 ### System Performance
 - **Signal Generation**: Sub-100ms processing latency
 - **Multi-timeframe Analysis**: 6 concurrent timeframe calculations
-- **Data Throughput**: Real-time processing of 24+ exchange feeds
+- **Data Throughput**: Real-time processing of 20+ exchange feeds
 - **Memory Efficiency**: Optimized with pre-aggregated continuous queries
 
 ### Trading Performance Metrics
@@ -342,8 +339,8 @@ services:
 }
 ```
 
-### Monitoring & Visualization
-- **Backtest Plotting System**: Professional visualization via `/backtest/visualization/plotter.py`
+### Monitoring & Alerting
+- **Grafana Dashboards**: Real-time system and trading performance
 - **Health Checks**: Automated service monitoring with status endpoints
 - **Log Aggregation**: Centralized logging with rotation and retention
 - **Performance Metrics**: System resource usage and trading statistics
@@ -357,25 +354,16 @@ services:
 - **Container Security**: Isolated Docker services with minimal privileges
 
 ### Risk Controls
-```yaml
-# Risk management configuration (/config/risk_management.yaml)
-position_sizing:
-  max_position_size: 0.02        # 2% maximum per position
-  max_total_exposure: 0.1        # 10% total portfolio exposure
-  min_position_size: 0.001       # 0.1% minimum per position
-
-risk_limits:
-  max_consecutive_losses: 5      # Maximum consecutive losses
-  max_daily_loss: 0.05          # 5% maximum daily loss
-  max_drawdown: 0.15            # 15% maximum drawdown
-
-stop_loss:
-  default_pct: 0.02             # 2% default stop loss
-  enabled: true                 # Stop loss enabled
-
-take_profit:
-  default_pct: 0.04             # 4% default take profit
-  enabled: false                # Take profit disabled (flow-following)
+```python
+# Integrated risk management system
+class RiskLimits:
+    max_position_size: 0.02        # 2% maximum per position
+    max_total_exposure: 0.1        # 10% total portfolio exposure
+    max_open_positions: 2          # Maximum concurrent positions
+    max_daily_loss: 0.05          # 5% maximum daily loss
+    max_drawdown: 0.15            # 15% maximum drawdown
+    stop_loss_percentage: 0.025   # 2.5% stop loss
+    take_profit_percentage: 0.04  # 4% take profit
 ```
 
 ## 📚 Documentation
@@ -385,6 +373,7 @@ take_profit:
 docs/
 └── strategy/
     ├── SqueezeFlow.md                 # Complete trading methodology (478 lines)
+    ├── SqueezeFlow_Automation_Plan.md # Technical implementation guide
     └── SqueezeFlow_Changelog.md       # Version history and updates
 ```
 
@@ -419,7 +408,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔧 Technical Foundation
 
-**SqueezeFlow Trader** represents institutional-grade trading infrastructure with significant architectural improvements:
+**SqueezeFlow Trader 2** represents institutional-grade trading infrastructure with significant architectural improvements:
 
 ### **Major System Enhancements:**
 - **🏗️ Modular Backtest Engine**: Complete architectural redesign with industry-standard Python packaging
@@ -431,9 +420,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **🐳 Production Deployment**: 9-service Docker architecture with health monitoring
 
 ### **Data Infrastructure:**
-- **Real-time Processing**: 24+ exchange aggregation with sub-100ms latency
+- **Real-time Processing**: 20+ exchange aggregation with sub-100ms latency
 - **Storage Optimization**: 30-day rolling retention with efficient continuous query aggregation
-- **Market Coverage**: BTC/ETH pairs with expandable multi-exchange support
+- **Market Coverage**: 63+ BTC markets, 56+ ETH markets with automatic discovery
 - **Quality Assurance**: Data validation, coverage analysis, and reliability monitoring
 
-**Repository**: https://github.com/your-username/SqueezeFlow-Trader
+**Repository**: https://github.com/your-username/SqueezeFlow-Trader-2

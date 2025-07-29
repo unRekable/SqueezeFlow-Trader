@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SqueezeFlow Backtest Runner
-Easy-to-use interface for running backtests with the custom engine
+Easy-to-use interface for running backtests with the enhanced modular engine
 """
 
 import asyncio
@@ -9,11 +9,10 @@ import json
 from datetime import datetime, timedelta
 import sys
 import os
+import subprocess
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from backtest.engine import SqueezeFlowBacktestEngine
 
 
 def get_date_range_suggestions():
@@ -59,8 +58,8 @@ def get_date_range_suggestions():
     }
 
 
-async def run_quick_backtest(period_key: str = "last_week", balance: float = 10000):
-    """Run a quick backtest with predefined periods"""
+async def run_quick_backtest(period_key: str = "last_week", balance: float = 10000, strategy: str = "production_enhanced_strategy"):
+    """Run a quick backtest with predefined periods using the modular engine"""
     
     periods = get_date_range_suggestions()
     
@@ -70,40 +69,61 @@ async def run_quick_backtest(period_key: str = "last_week", balance: float = 100
         
     period = periods[period_key]
     
-    print(f"🚀 Running SqueezeFlow Backtest: {period['description']}")
+    print(f"🚀 Running Enhanced SqueezeFlow Backtest: {period['description']}")
     print(f"📅 Period: {period['start']} to {period['end']}")
     print(f"💰 Initial Balance: ${balance:,.2f}")
+    print(f"⚙️ Strategy: {strategy}")
     print(f"{'='*60}")
     
     try:
-        # Create and run backtest engine
-        engine = SqueezeFlowBacktestEngine(
-            start_date=period['start'],
-            end_date=period['end'],
-            initial_balance=balance
+        # Change to backtest directory for proper imports
+        current_dir = os.getcwd()
+        backtest_dir = os.path.join(current_dir, 'backtest')
+        
+        # Build command to run the modular engine
+        cmd = [
+            sys.executable, 'engine.py',
+            '--start-date', period['start'],
+            '--end-date', period['end'],
+            '--balance', str(balance),
+            '--strategy', strategy
+        ]
+        
+        print(f"📋 Running command: {' '.join(cmd)}")
+        print(f"📂 Working directory: {backtest_dir}")
+        print(f"{'='*60}")
+        
+        # Run the backtest engine
+        result = subprocess.run(
+            cmd,
+            cwd=backtest_dir,
+            capture_output=True,
+            text=True,
+            check=False
         )
         
-        report = await engine.run_backtest()
+        # Print the output
+        if result.stdout:
+            print("📊 BACKTEST OUTPUT:")
+            print(result.stdout)
         
-        # Print results
-        print_backtest_results(report)
+        if result.stderr:
+            print("⚠️ WARNINGS/ERRORS:")
+            print(result.stderr)
         
-        # Save detailed report
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"backtest_results_{period_key}_{timestamp}.json"
-        
-        with open(filename, 'w') as f:
-            json.dump(report, f, indent=2, default=str)
+        if result.returncode == 0:
+            print(f"\n✅ Backtest completed successfully!")
+            print(f"📁 Check backtest/ directory for generated charts and results")
+        else:
+            print(f"\n❌ Backtest failed with exit code: {result.returncode}")
             
-        print(f"\n📄 Detailed report saved: {filename}")
-        
-        return report
+        return result.returncode == 0
         
     except Exception as e:
-        print(f"❌ Backtest failed: {e}")
+        print(f"❌ Backtest runner failed: {e}")
         import traceback
         print(f"📋 Error details:\n{traceback.format_exc()}")
-        return None
+        return False
 
 
 def print_backtest_results(report):
@@ -166,15 +186,15 @@ def print_backtest_results(report):
 
 
 async def main():
-    """Main function with command line interface"""
+    """Main function with enhanced command line interface"""
     
-    print("🚀 SqueezeFlow Custom Backtest Engine")
-    print("Testing strategy EXACTLY as implemented with historical data")
+    print("🚀 Enhanced SqueezeFlow Backtest Engine")
+    print("Advanced Strategy Implementation with Multi-Timeframe Analysis")
     print("="*60)
     
     if len(sys.argv) < 2:
         print("📖 USAGE:")
-        print("  python run_backtest.py <period> [balance]")
+        print("  python run_backtest.py <period> [balance] [strategy]")
         print()
         print("📅 AVAILABLE PERIODS:")
         
@@ -183,18 +203,28 @@ async def main():
             print(f"   {key:<15} - {info['description']} ({info['start']} to {info['end']})")
             
         print()
+        print("⚙️ AVAILABLE STRATEGIES:")
+        print("   production_enhanced_strategy - OPTIMIZED implementation with:")
+        print("     • Advanced State Machine System")
+        print("     • Multi-Timeframe Analysis (5min-240min)")
+        print("     • Dynamic Trailing Stops & ROI Management")
+        print("     • Risk-Adjusted Leverage System")
+        print("     • Real-Time Performance Validation")
+        print()
         print("💡 EXAMPLES:")
         print("   python run_backtest.py last_week")
         print("   python run_backtest.py last_month 20000")
         print("   python run_backtest.py january_2025 50000")
+        print("   python run_backtest.py last_week 15000 production_enhanced_strategy")
         
         return
         
     period_key = sys.argv[1]
     balance = float(sys.argv[2]) if len(sys.argv) > 2 else 10000
+    strategy = sys.argv[3] if len(sys.argv) > 3 else "production_enhanced_strategy"
     
     # Run backtest
-    await run_quick_backtest(period_key, balance)
+    await run_quick_backtest(period_key, balance, strategy)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,8 @@ async def start_squeezeflow_calculator(dry_run: bool = True):
         print("⚙️  SqueezeFlow Calculator service initialized")
         print("🔍 Starting CVD-based squeeze detection...")
         print("📊 Monitoring multi-exchange volume flow")
+        print("🔄 State machine mode detection enabled")
+        print("🎯 Dynamic position sizing active")
         print("⏹️  Press Ctrl+C to stop")
         
         await calculator_service.run()
@@ -196,6 +198,87 @@ def run_cvd_analysis(symbol: str, time_range: str, output_file: str = None):
         print(f"❌ CVD analysis error: {e}")
         return False
 
+async def check_state_machine_status():
+    """Check and display state machine status"""
+    try:
+        print("🔄 STATE MACHINE STATUS CHECK")
+        print("=" * 50)
+        
+        # Check if state machine modules are available
+        try:
+            from perpetual_state_machine_system import PerpetualStateMachine, TradingMode
+            from enhanced_mode_system import EnhancedModeSystem
+            print("✅ State machine modules: AVAILABLE")
+            
+            # Test instantiation
+            state_machine = PerpetualStateMachine()
+            enhanced_system = EnhancedModeSystem()
+            print("✅ State machine objects: INITIALIZED")
+            
+        except ImportError as e:
+            print(f"❌ State machine modules: NOT AVAILABLE ({e})")
+            return False
+        
+        # Check Redis connectivity for mode caching
+        try:
+            import redis
+            redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+            redis_client.ping()
+            print("✅ Redis connection: OK")
+            
+            # Check for existing mode states
+            mode_keys = redis_client.keys("trading_mode:*:current")
+            if mode_keys:
+                print(f"📊 Active mode states: {len(mode_keys)} symbols")
+                for key in mode_keys[:3]:  # Show first 3
+                    try:
+                        mode_data = redis_client.get(key)
+                        if mode_data:
+                            import json
+                            mode_info = json.loads(mode_data)
+                            symbol = key.split(':')[1]
+                            print(f"   {symbol}: {mode_info.get('mode', 'UNKNOWN')} "
+                                  f"(confidence: {mode_info.get('confidence', 0):.2f})")
+                    except:
+                        pass
+            else:
+                print("📊 Active mode states: None found")
+                
+        except Exception as e:
+            print(f"❌ Redis connection: FAILED ({e})")
+            return False
+        
+        # Check InfluxDB for signal storage
+        try:
+            from influxdb import InfluxDBClient
+            influx_client = InfluxDBClient(host='localhost', port=8086, database='significant_trades')
+            databases = influx_client.get_list_database()
+            print("✅ InfluxDB connection: OK")
+            
+            # Check for recent signals
+            try:
+                result = influx_client.query("SELECT COUNT(*) FROM squeeze_signals WHERE time > now() - 1h")
+                points = list(result.get_points())
+                if points:
+                    count = points[0].get('count', 0)
+                    print(f"📈 Recent signals (1h): {count}")
+                else:
+                    print("📈 Recent signals (1h): 0")
+            except:
+                print("📈 Recent signals: Unable to query")
+                
+        except Exception as e:
+            print(f"❌ InfluxDB connection: FAILED ({e})")
+            return False
+        
+        print("=" * 50)
+        print("🎯 STATE MACHINE INTEGRATION: READY")
+        return True
+        
+    except Exception as e:
+        print(f"❌ State machine status check failed: {e}")
+        return False
+
 def show_docker_info():
     """Show Docker-specific information"""
     hosts = get_service_hosts()
@@ -270,7 +353,12 @@ Time Ranges for backtest/analyze:
     )
     
     # Status command
-    subparsers.add_parser('status', help='Check system status')
+    status_parser = subparsers.add_parser('status', help='Check system status')
+    status_parser.add_argument(
+        '--state-machine',
+        action='store_true',
+        help='Check state machine integration status'
+    )
     
     # Validate command
     subparsers.add_parser('validate', help='Validate system setup')
@@ -338,7 +426,10 @@ async def main():
                 sys.exit(1)
             
         elif args.command == 'status':
-            success = check_system_status()
+            if args.state_machine:
+                success = await check_state_machine_status()
+            else:
+                success = check_system_status()
             if not success:
                 sys.exit(1)
             

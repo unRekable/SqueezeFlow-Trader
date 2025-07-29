@@ -18,6 +18,8 @@ COPY utils/ /app/utils/
 COPY indicators/ /app/indicators/
 COPY services/ /app/services/
 
+# State machine files removed
+
 # Create entrypoint
 COPY services/squeezeflow_calculator.py /app/squeezeflow_calculator.py
 RUN echo '#!/bin/bash\ncd /app && python squeezeflow_calculator.py' > /app/entrypoint.sh

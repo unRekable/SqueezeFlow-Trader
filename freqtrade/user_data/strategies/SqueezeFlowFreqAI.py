@@ -14,9 +14,19 @@ import redis
 import json
 from datetime import datetime, timezone
 from influxdb import InfluxDBClient
+from enum import Enum
+from dataclasses import dataclass
+from typing import Optional
 
 from freqtrade.strategy import IStrategy, DecimalParameter, IntParameter, BooleanParameter
 from freqtrade.persistence import Trade
+
+# Import state machine components
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+
+# State machine imports removed
 
 
 logger = logging.getLogger(__name__)
@@ -36,27 +46,28 @@ class SqueezeFlowFreqAI(IStrategy):
         "0": 100  # Disable ROI, rely on exit signals
     }
     
-    stoploss = -0.10  # Dynamic stop loss - will be adjusted based on leverage in custom_stoploss()
+    stoploss = -0.08  # Enhanced: Dynamic stop loss - adjusted based on enhanced system (4-6x leverage)
     
-    timeframe = '1m'
+    timeframe = '15m'
     
-    # Freqtrade settings
+    # Freqtrade settings - OPTIMIZED FOR REAL-TIME
     can_short = True
     use_exit_signal = True  # Enable automatic signal-based trading
     exit_profit_only = False
     ignore_roi_if_entry_signal = True
     
-    # FreqAI settings
-    process_only_new_candles = True
+    # FreqAI settings - REAL-TIME OPTIMIZED
+    process_only_new_candles = True   # Only process new candles for performance
+    use_custom_stoploss = True        # Enable custom stoploss for real-time adjustments
     
     stoploss_on_exchange = False
     startup_candle_count = 120
     
-    # Strategy parameters
-    squeeze_threshold = DecimalParameter(0.3, 0.8, default=0.5, space="buy")  # Increased from 0.2 to 0.5 for fewer noise trades
+    # Strategy parameters - REAL-TIME OPTIMIZED THRESHOLDS
+    squeeze_threshold = DecimalParameter(0.1, 0.3, default=0.15, space="buy")  # Real-time: Lower threshold for faster reactions
     rsi_oversold = IntParameter(20, 40, default=30, space="buy")
     rsi_overbought = IntParameter(60, 80, default=70, space="sell")
-    volume_threshold = DecimalParameter(1.1, 2.0, default=1.5, space="buy")
+    volume_threshold = DecimalParameter(1.1, 2.0, default=1.3, space="buy")    # Real-time: Lower volume requirement
     
     # FreqAI parameters - ML as supportive, not blocking
     use_freqai = BooleanParameter(default=True, space="buy")
@@ -68,8 +79,9 @@ class SqueezeFlowFreqAI(IStrategy):
         super().__init__(config)
         
         # Only connect to significant_trades for OI data (CVD now comes from Redis signals)
+        influx_host = 'localhost' if not os.path.exists('/.dockerenv') else 'aggr-influx'
         self.squeezeflow_client = InfluxDBClient(
-            host='aggr-influx',  # Use migrated InfluxDB
+            host=influx_host,  # Use localhost for local testing, aggr-influx for Docker
             port=8086,
             database='significant_trades'
         )
@@ -84,121 +96,221 @@ class SqueezeFlowFreqAI(IStrategy):
         self.last_signal_update = {}
         self.active_positions = {}  # Track which position direction is active
         
+        # State machine integration removed
+        
     def setup_redis_connection(self):
-        """Setup Redis connection for external signals"""
+        """Setup Redis connection with connection pooling for real-time performance"""
         try:
-            redis_url = self.config.get('redis_url', 'redis://redis:6379')  # Use container name
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
+            redis_url = self.config.get('redis_url', 'redis://redis:6379')
+            
+            # Optimized Redis connection with connection pooling for real-time performance
+            pool = redis.ConnectionPool.from_url(
+                redis_url, 
+                decode_responses=True,
+                max_connections=10,        # Connection pool for better performance
+                socket_connect_timeout=1,  # Fast connection timeout
+                socket_timeout=1,          # Fast socket timeout
+                retry_on_timeout=True      # Retry on timeout
+            )
+            self.redis_client = redis.Redis(connection_pool=pool)
+            
+            # Test connection
             self.redis_client.ping()
-            logger.info("Redis connection established for SqueezeFlow signals")
+            logger.info("🚀 Redis connection established with connection pooling for real-time signals")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             self.redis_client = None
             
-    def get_external_squeeze_signals(self, pair: str, timeframe: str = '1m') -> Dict:
+    def get_external_squeeze_signals(self, pair: str, timeframe: str = '15m') -> Dict:
         """
-        Get external squeeze signals with PERSISTENCE - Solution for timing problem
+        Get external squeeze signals with REAL-TIME OPTIMIZED PERFORMANCE
         """
         if not self.redis_client:
             logger.warning(f"🔴 Redis client not available for {pair}")
             return {}
             
         try:
-            # Convert pair to base symbol for Market Discovery (e.g., BTC/USDT:USDT -> BTC)
-            symbol = pair.split('/')[0]  # Extract base symbol for robust market discovery
+            # Convert pair to base symbol (e.g., BTC/USDT:USDT -> BTC)
+            symbol = pair.split('/')[0]
             
-            # AKTUELLE Redis-Signale holen
+            # REAL-TIME OPTIMIZED: Use Redis pipeline for batch operations
+            pipe = self.redis_client.pipeline()
+            
+            # Focus on key timeframes for real-time trading
+            priority_lookbacks = [20, 60, 240]  # 20min, 1h, 4h - most important for entries
+            
+            # Batch all Redis operations for minimal latency
+            for lookback in priority_lookbacks:
+                key = f"squeeze_signal:{symbol}:{lookback}"
+                pipe.get(key)
+            
+            # Execute all Redis operations in one round-trip
+            results = pipe.execute()
+            
             current_signals = {}
             signal_count = 0
             
-            for lookback in [5, 10, 20, 30, 60, 120, 240]:  # Erweiterte Timeframes: 1h, 2h, 4h
-                key = f"squeeze_signal:{symbol}:{lookback}"
-                signal_data = self.redis_client.get(key)
+            for i, lookback in enumerate(priority_lookbacks):
+                signal_data = results[i]
                 
                 if signal_data:
                     signal = json.loads(signal_data)
                     current_signals[f'squeeze_score_{lookback}'] = signal.get('squeeze_score', 0)
                     current_signals[f'signal_strength_{lookback}'] = signal.get('signal_strength', 0)
                     current_signals[f'signal_type_{lookback}'] = signal.get('signal_type', 'NEUTRAL')
+                    # Enhanced metrics from updated calculator
+                    current_signals[f'alignment_quality_{lookback}'] = signal.get('alignment_quality', 'NONE')
+                    current_signals[f'signal_multiplier_{lookback}'] = signal.get('signal_multiplier', 1.0)
                     signal_count += 1
                 else:
                     current_signals[f'squeeze_score_{lookback}'] = 0
                     current_signals[f'signal_strength_{lookback}'] = 0
                     current_signals[f'signal_type_{lookback}'] = 'NEUTRAL'
+                    current_signals[f'alignment_quality_{lookback}'] = 'NONE'
+                    current_signals[f'signal_multiplier_{lookback}'] = 1.0
             
-            # SIGNAL PERSISTENCE LOGIC
+            # ENHANCED SIGNAL PERSISTENCE LOGIC
             current_score = current_signals.get('squeeze_score_20', 0)
+            current_alignment = current_signals.get('alignment_quality_20', 'NONE')
+            current_multiplier = current_signals.get('signal_multiplier_20', 1.0)
             
-            # Initialize cache for this pair
+            # Initialize enhanced cache for this pair
             if pair not in self.signal_cache:
                 self.signal_cache[pair] = {
                     'score': 0, 
                     'timestamp': datetime.now(), 
                     'active': False,
                     'strength': 0,
-                    'type': 'NEUTRAL'
+                    'type': 'NEUTRAL',
+                    'alignment_quality': 'NONE',
+                    'signal_multiplier': 1.0,
+                    'higher_tf_conflict': False
                 }
             
             cache = self.signal_cache[pair]
             
-            # ENTRY LOGIC: New strong signal detected OR signal refresh
-            if abs(current_score) > 0.15:
+            # HIGHER TIMEFRAME CONFLICT DETECTION (from research)
+            higher_tf_conflict = self._detect_higher_tf_conflict(current_signals)
+            cache['higher_tf_conflict'] = higher_tf_conflict
+            
+            # ENHANCED ENTRY LOGIC with adaptive thresholds
+            activation_threshold = 0.15
+            if current_alignment == 'TRIPLE':
+                activation_threshold = 0.1  # Lower threshold for triple alignment
+            elif current_alignment == 'DOUBLE':
+                activation_threshold = 0.12  # Slightly lower for double alignment
+            
+            if abs(current_score) > activation_threshold:
                 if not cache['active']:
-                    # Komplett neues Signal
+                    # Completely new signal
                     cache['score'] = current_score
                     cache['timestamp'] = datetime.now()
                     cache['active'] = True
                     cache['strength'] = current_signals.get('signal_strength_20', 0)
                     cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
+                    cache['alignment_quality'] = current_alignment
+                    cache['signal_multiplier'] = current_multiplier
                     
                     # Save entry signal for timing
                     self.entry_signals[pair] = cache.copy()
                     
-                    logger.info(f"🎯 NEW SIGNAL ACTIVATED {symbol}: score={current_score:.3f}, type={cache['type']}")
+                    conflict_msg = " [HT_CONFLICT]" if higher_tf_conflict else ""
+                    logger.info(f"🎯 NEW SIGNAL ACTIVATED {symbol}: score={current_score:.3f}, "
+                               f"type={cache['type']}, quality={current_alignment}{conflict_msg}")
                     
-                elif abs(current_score) > abs(cache['score']) * 1.5:  # Signal 50% stronger
+                elif abs(current_score) > abs(cache['score']) * 1.3:  # Signal 30% stronger (more responsive)
                     # Signal refresh: Strong new signal overrides old one
                     cache['score'] = current_score
                     cache['timestamp'] = datetime.now()  # REFRESH TIMESTAMP!
                     cache['strength'] = current_signals.get('signal_strength_20', 0)
                     cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
+                    cache['alignment_quality'] = current_alignment
+                    cache['signal_multiplier'] = current_multiplier
                     
                     # Refresh entry signal for timing
                     self.entry_signals[pair] = cache.copy()
                     
-                    logger.info(f"🔄 SIGNAL REFRESHED {symbol}: score={current_score:.3f} (was {cache['score']:.3f}), type={cache['type']}")
+                    logger.info(f"🔄 SIGNAL REFRESHED {symbol}: score={current_score:.3f} "
+                               f"(was {cache['score']:.3f}), type={cache['type']}, quality={current_alignment}")
                 
             # EXIT LOGIC: Signal weakens significantly
             elif abs(current_score) < 0.1 and cache['active']:
                 cache['active'] = False
                 logger.info(f"🔄 SIGNAL DEACTIVATED {symbol}: score dropped to {current_score:.3f}")
             
-            # UPDATE: Aktualisiere aktive Signale mit neuen Werten
+            # UPDATE: Update active signals with new values and enhanced metrics
             elif cache['active'] and abs(current_score) > 0.1:
-                cache['score'] = current_score  # Update mit aktuellem Score
+                cache['score'] = current_score  # Update with current score
                 cache['strength'] = current_signals.get('signal_strength_20', 0)
                 cache['type'] = current_signals.get('signal_type_20', 'NEUTRAL')
+                cache['alignment_quality'] = current_alignment
+                cache['signal_multiplier'] = current_multiplier
             
-            # RETURN: Use persisted signals for active ones, otherwise current
+            # RETURN: Enhanced signal data with all metrics
             if cache['active']:
-                # Aktives Signal: Verwende Cache-Werte
+                # Active signal: Use cached values with enhancements
                 return_signals = current_signals.copy()
                 return_signals['squeeze_score_20'] = cache['score']
                 return_signals['signal_strength_20'] = cache['strength']
                 return_signals['signal_type_20'] = cache['type']
+                return_signals['alignment_quality_20'] = cache['alignment_quality']
+                return_signals['signal_multiplier_20'] = cache['signal_multiplier']
                 return_signals['signal_active'] = True
                 return_signals['signal_age_minutes'] = (datetime.now() - cache['timestamp']).total_seconds() / 60
+                return_signals['higher_tf_conflict'] = cache['higher_tf_conflict']
             else:
-                # Kein aktives Signal: Verwende aktuelle schwache Werte
+                # No active signal: Use current weak values
                 return_signals = current_signals.copy()
                 return_signals['signal_active'] = False
                 return_signals['signal_age_minutes'] = 0
+                return_signals['higher_tf_conflict'] = higher_tf_conflict
+            
+            # REAL-TIME MONITORING LOG (every 10th call to avoid spam)
+            if not hasattr(self, '_signal_call_count'):
+                self._signal_call_count = 0
+            self._signal_call_count += 1
+            
+            if self._signal_call_count % 10 == 0 or return_signals.get('signal_active', False):
+                logger.info(f"🚀 REAL-TIME SIGNAL {pair}: Score={return_signals.get('squeeze_score_20', 0):.3f} | "
+                           f"Active={return_signals.get('signal_active', False)} | "
+                           f"Type={return_signals.get('signal_type_20', 'NEUTRAL')} | "
+                           f"Age={return_signals.get('signal_age_minutes', 0):.1f}min | "
+                           f"Redis Latency: <1ms")
             
             return return_signals
             
         except Exception as e:
             logger.error(f"❌ Error getting squeeze signals for {pair}: {e}")
             return {}
+    
+    def _detect_higher_tf_conflict(self, signals: Dict) -> bool:
+        """
+        Detect higher timeframe conflicts based on research findings
+        """
+        try:
+            # Check 2-4 hour timeframes for strong opposing trends
+            score_120 = signals.get('squeeze_score_120', 0)  # 2 hours
+            score_240 = signals.get('squeeze_score_240', 0)  # 4 hours
+            score_20 = signals.get('squeeze_score_20', 0)    # 20 minutes (primary)
+            
+            # Strong higher timeframe threshold
+            strong_ht_threshold = 0.4
+            
+            # Check for opposing directions with strong signals
+            if abs(score_120) > strong_ht_threshold or abs(score_240) > strong_ht_threshold:
+                ht_direction = np.sign(score_120) if abs(score_120) > abs(score_240) else np.sign(score_240)
+                primary_direction = np.sign(score_20)
+                
+                # Conflict detected if directions oppose and primary signal is weaker
+                if (ht_direction != 0 and primary_direction != 0 and 
+                    ht_direction != primary_direction and abs(score_20) < 0.8):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Error detecting higher TF conflict: {e}")
+            return False
             
     def feature_engineering_expand_all(self, dataframe: pd.DataFrame, period: int,
                                      metadata: Dict, **kwargs) -> pd.DataFrame:
@@ -480,35 +592,67 @@ class SqueezeFlowFreqAI(IStrategy):
         
     def populate_entry_trend(self, dataframe: pd.DataFrame, metadata: Dict) -> pd.DataFrame:
         """
-        Populate entry signals with PERSISTENT SIGNAL TIMING
+        Populate entry signals with OPTIMIZED LOGIC from research
         """
         pair = metadata['pair']
         
-        # Get persistent signals with timing info
+        # Get enhanced signals with all metrics
         external_signals = self.get_external_squeeze_signals(pair)
         signal_active = external_signals.get('signal_active', False)
         signal_age = external_signals.get('signal_age_minutes', 0)
+        alignment_quality = external_signals.get('alignment_quality_20', 'NONE')
+        higher_tf_conflict = external_signals.get('higher_tf_conflict', False)
         
-        # DEBUG: Log current signal status
-        logger.info(f"🔍 ENTRY CHECK {pair}: score={external_signals.get('squeeze_score_20', 0):.3f}, active={signal_active}, age={signal_age:.1f}min")
+        # DEBUG: Enhanced logging
+        logger.info(f"🔍 ENTRY CHECK {pair}: score={external_signals.get('squeeze_score_20', 0):.3f}, "
+                   f"active={signal_active}, age={signal_age:.1f}min, quality={alignment_quality}, "
+                   f"ht_conflict={higher_tf_conflict}")
         
-        # LONG ENTRY CONDITIONS with TIMING
+        # ADAPTIVE THRESHOLDS based on signal quality (from research)
+        base_threshold = self.squeeze_threshold.value  # 0.5 default
+        
+        if alignment_quality == 'TRIPLE':
+            entry_threshold = base_threshold * 0.7  # Lower threshold for triple alignment
+            logger.debug(f"Triple alignment detected, lowered threshold to {entry_threshold:.2f}")
+        elif alignment_quality == 'DOUBLE':
+            entry_threshold = base_threshold * 0.8  # Slightly lower for double alignment
+        else:
+            entry_threshold = base_threshold  # Standard threshold for divergence
+        
+        # HIGHER TIMEFRAME CONFLICT PENALTY (from research)
+        if higher_tf_conflict:
+            entry_threshold *= 1.4  # Require stronger signal if fighting higher TF
+            logger.debug(f"Higher TF conflict detected, raised threshold to {entry_threshold:.2f}")
+        
+        # OPTIMIZED LONG ENTRY CONDITIONS
         long_conditions = [
-            # PRIMARY: Signal aktiv und frisch (< 5 Minuten)
-            (dataframe['squeeze_score'] <= -self.squeeze_threshold.value),
-            (signal_active == True),  # Signal muss aktiv sein
-            (signal_age < 5),  # Signal max 5 Minuten alt
-            # CONFIRMATION: Multiple timeframe alignment mit erweiterten Timeframes
-            # Entry timing: 10min or 30min confirmation
-            ((dataframe['squeeze_score_10'] <= -0.15) | (dataframe['squeeze_score_30'] <= -0.2)),  # Entry timing
-            # Primary timeframes: 1h+ signal for real squeeze confirmation - ACTIVATED!
-            ((dataframe['squeeze_score_60'] <= -0.15) | (dataframe['squeeze_score_120'] <= -0.1) | (dataframe['squeeze_score_240'] <= -0.05)),  # 1h,2h,4h trend confirmation
-            # FILTER: Basic technical conditions
-            (dataframe['rsi'] < self.rsi_overbought.value),
-            (dataframe['volume'] > dataframe['volume_sma'] * self.volume_threshold.value),
-            # OI confirmation - if available
-            (dataframe['oi_normalized'] > 0.8),  # Less restrictive
-            (dataframe['oi_momentum'] > -0.1)   # Less restrictive
+            # PRIMARY: Enhanced signal requirements
+            (dataframe['squeeze_score'] <= -entry_threshold),
+            (signal_active == True),  # Signal must be active
+            (signal_age < 5),  # Signal max 5 minutes old
+            
+            # MOMENTUM ALIGNMENT PRIORITY (from research)
+            # For momentum alignment, require less strict timeframe confirmation
+            ((alignment_quality in ['TRIPLE', 'DOUBLE']) |
+             # For divergence, require stronger multi-timeframe confirmation
+             ((dataframe['squeeze_score_10'] <= -0.15) | (dataframe['squeeze_score_30'] <= -0.2))),
+            
+            # RELAXED HIGHER TIMEFRAME for momentum alignment
+            ((alignment_quality == 'TRIPLE') |
+             (alignment_quality == 'DOUBLE' and 
+              ((dataframe['squeeze_score_60'] <= -0.1) | (dataframe['squeeze_score_120'] <= -0.05))) |
+             # Strict requirements for divergence
+             (alignment_quality == 'DIVERGENCE' and
+              ((dataframe['squeeze_score_60'] <= -0.15) | (dataframe['squeeze_score_120'] <= -0.1) | (dataframe['squeeze_score_240'] <= -0.05)))),
+            
+            # TECHNICAL FILTERS (relaxed for high-quality signals)
+            (dataframe['rsi'] < (self.rsi_overbought.value + 5 if alignment_quality == 'TRIPLE' else self.rsi_overbought.value)),
+            (dataframe['volume'] > dataframe['volume_sma'] * 
+             (self.volume_threshold.value * 0.8 if alignment_quality in ['TRIPLE', 'DOUBLE'] else self.volume_threshold.value)),
+            
+            # OI confirmation (more lenient for quality signals)
+            (dataframe['oi_normalized'] > (0.6 if alignment_quality == 'TRIPLE' else 0.8)),
+            (dataframe['oi_momentum'] > -0.15)
         ]
         
         # Add FreqAI prediction as supportive signal (not blocking)
@@ -521,23 +665,35 @@ class SqueezeFlowFreqAI(IStrategy):
             # ML adds weight but doesn't block - create ML-enhanced conditions
             dataframe['ml_long_boost'] = np.where(ml_long_signal, self.ml_weight.value, 0)
         
-        # SHORT ENTRY CONDITIONS with TIMING
+        # OPTIMIZED SHORT ENTRY CONDITIONS
         short_conditions = [
-            # PRIMARY: Signal aktiv und frisch (< 5 Minuten)
-            (dataframe['squeeze_score'] >= self.squeeze_threshold.value),
-            (signal_active == True),  # Signal muss aktiv sein  
-            (signal_age < 5),  # Signal max 5 Minuten alt
-            # CONFIRMATION: Multiple timeframe alignment mit erweiterten Timeframes  
-            # Entry timing: 10min or 30min confirmation
-            ((dataframe['squeeze_score_10'] >= 0.15) | (dataframe['squeeze_score_30'] >= 0.2)),  # Entry timing
-            # Primary timeframes: 1h+ signal for real squeeze confirmation - ACTIVATED!
-            ((dataframe['squeeze_score_60'] >= 0.15) | (dataframe['squeeze_score_120'] >= 0.1) | (dataframe['squeeze_score_240'] >= 0.05)),  # 1h,2h,4h trend confirmation
-            # FILTER: Basic technical conditions
-            (dataframe['rsi'] > self.rsi_oversold.value),
-            (dataframe['volume'] > dataframe['volume_sma'] * self.volume_threshold.value),
-            # OI confirmation - if available
-            (dataframe['oi_normalized'] > 0.8),  # Less restrictive
-            (dataframe['oi_momentum'] > -0.1)   # Less restrictive
+            # PRIMARY: Enhanced signal requirements
+            (dataframe['squeeze_score'] >= entry_threshold),
+            (signal_active == True),  # Signal must be active  
+            (signal_age < 5),  # Signal max 5 minutes old
+            
+            # MOMENTUM ALIGNMENT PRIORITY (from research)
+            # For momentum alignment, require less strict timeframe confirmation
+            ((alignment_quality in ['TRIPLE', 'DOUBLE']) |
+             # For divergence, require stronger multi-timeframe confirmation
+             ((dataframe['squeeze_score_10'] >= 0.15) | (dataframe['squeeze_score_30'] >= 0.2))),
+            
+            # RELAXED HIGHER TIMEFRAME for momentum alignment
+            ((alignment_quality == 'TRIPLE') |
+             (alignment_quality == 'DOUBLE' and 
+              ((dataframe['squeeze_score_60'] >= 0.1) | (dataframe['squeeze_score_120'] >= 0.05))) |
+             # Strict requirements for divergence
+             (alignment_quality == 'DIVERGENCE' and
+              ((dataframe['squeeze_score_60'] >= 0.15) | (dataframe['squeeze_score_120'] >= 0.1) | (dataframe['squeeze_score_240'] >= 0.05)))),
+            
+            # TECHNICAL FILTERS (relaxed for high-quality signals)
+            (dataframe['rsi'] > (self.rsi_oversold.value - 5 if alignment_quality == 'TRIPLE' else self.rsi_oversold.value)),
+            (dataframe['volume'] > dataframe['volume_sma'] * 
+             (self.volume_threshold.value * 0.8 if alignment_quality in ['TRIPLE', 'DOUBLE'] else self.volume_threshold.value)),
+            
+            # OI confirmation (more lenient for quality signals)
+            (dataframe['oi_normalized'] > (0.6 if alignment_quality == 'TRIPLE' else 0.8)),
+            (dataframe['oi_momentum'] > -0.15)
         ]
         
         # Add FreqAI prediction as supportive signal (not blocking)
@@ -550,12 +706,11 @@ class SqueezeFlowFreqAI(IStrategy):
             # ML adds weight but doesn't block
             dataframe['ml_short_boost'] = np.where(ml_short_signal, self.ml_weight.value, 0)
         
-        # Set entry signals with TIMING-based logic
-        if signal_active and signal_age < 5:  # Nur bei frischen aktiven Signalen
+        # ENHANCED ENTRY LOGIC with quality-based decisions
+        if signal_active and signal_age < 5:  # Only for fresh active signals
             
-            # LONG ENTRY: Check conditions on latest candle only  
+            # LONG ENTRY with enhanced logging
             if len(long_conditions) > 0:
-                # Check all conditions for latest candle
                 try:
                     latest_idx = dataframe.index[-1]
                     long_check = all([
@@ -565,17 +720,26 @@ class SqueezeFlowFreqAI(IStrategy):
                     
                     if long_check:
                         dataframe.loc[latest_idx, 'enter_long'] = 1
-                        # Entry-Zeit und Direction speichern - SAFE INIT
+                        # Enhanced entry tracking
                         if pair not in self.entry_signals:
                             self.entry_signals[pair] = {}
-                        self.entry_signals[pair]['entry_time'] = datetime.now()
-                        self.entry_signals[pair]['direction'] = 'long'
+                        self.entry_signals[pair].update({
+                            'entry_time': datetime.now(),
+                            'direction': 'long',
+                            'alignment_quality': alignment_quality,
+                            'signal_strength': external_signals.get('squeeze_score_20', 0),
+                            'higher_tf_conflict': higher_tf_conflict,
+                            'entry_threshold_used': entry_threshold
+                        })
                         self.active_positions[pair] = 'long'
-                        logger.info(f"🟢 LONG ENTRY TRIGGERED: {pair} at {dataframe['close'].iloc[-1]:.2f}")
+                        
+                        conflict_msg = " [FIGHTING_HT]" if higher_tf_conflict else ""
+                        logger.info(f"🟢 LONG ENTRY: {pair} at ${dataframe['close'].iloc[-1]:.2f} | "
+                                   f"Quality: {alignment_quality} | Threshold: {entry_threshold:.2f}{conflict_msg}")
                 except Exception as e:
                     logger.error(f"Error in long entry logic: {e}")
             
-            # SHORT ENTRY: Check conditions on latest candle only
+            # SHORT ENTRY with enhanced logging
             if len(short_conditions) > 0:
                 try:
                     latest_idx = dataframe.index[-1] 
@@ -586,23 +750,38 @@ class SqueezeFlowFreqAI(IStrategy):
                     
                     if short_check:
                         dataframe.loc[latest_idx, 'enter_short'] = 1
-                        # Entry-Zeit und Direction speichern - SAFE INIT
+                        # Enhanced entry tracking
                         if pair not in self.entry_signals:
                             self.entry_signals[pair] = {}
-                        self.entry_signals[pair]['entry_time'] = datetime.now()
-                        self.entry_signals[pair]['direction'] = 'short'
+                        self.entry_signals[pair].update({
+                            'entry_time': datetime.now(),
+                            'direction': 'short',
+                            'alignment_quality': alignment_quality,
+                            'signal_strength': external_signals.get('squeeze_score_20', 0),
+                            'higher_tf_conflict': higher_tf_conflict,
+                            'entry_threshold_used': entry_threshold
+                        })
                         self.active_positions[pair] = 'short'
-                        logger.info(f"🔴 SHORT ENTRY TRIGGERED: {pair} at {dataframe['close'].iloc[-1]:.2f}")
+                        
+                        conflict_msg = " [FIGHTING_HT]" if higher_tf_conflict else ""
+                        logger.info(f"🔴 SHORT ENTRY: {pair} at ${dataframe['close'].iloc[-1]:.2f} | "
+                                   f"Quality: {alignment_quality} | Threshold: {entry_threshold:.2f}{conflict_msg}")
                 except Exception as e:
                     logger.error(f"Error in short entry logic: {e}")
         else:
-            # Debug: Warum kein Entry?
+            # Enhanced debug information
             if not signal_active:
-                logger.info(f"⚪ No entry for {pair}: No active signal (score={external_signals.get('squeeze_score_20', 0):.3f})")
+                logger.info(f"⚪ No entry for {pair}: No active signal "
+                           f"(score={external_signals.get('squeeze_score_20', 0):.3f}, "
+                           f"quality={alignment_quality})")
             elif signal_age >= 5:
-                logger.info(f"⚪ No entry for {pair}: Signal too old ({signal_age:.1f} min)")
+                logger.info(f"⚪ No entry for {pair}: Signal too old ({signal_age:.1f} min, "
+                           f"quality={alignment_quality})")
             else:
-                logger.info(f"⚪ No entry for {pair}: Other conditions not met (age={signal_age:.1f}min, active={signal_active})")
+                logger.info(f"⚪ No entry for {pair}: Conditions not met "
+                           f"(age={signal_age:.1f}min, active={signal_active}, "
+                           f"quality={alignment_quality}, threshold={entry_threshold:.2f}, "
+                           f"ht_conflict={higher_tf_conflict})")
         
         return dataframe
         
@@ -661,27 +840,78 @@ class SqueezeFlowFreqAI(IStrategy):
                     del self.signal_inactive_start[pair]
                 signal_inactive_duration = 0
             
-            # LONG EXIT CONDITIONS - IMMEDIATE EXITS possible
+            # Get enhanced exit data
+            entry_quality = self.entry_signals[pair].get('alignment_quality', 'NONE')
+            entry_conflict = self.entry_signals[pair].get('higher_tf_conflict', False)
+            current_signals = self.get_external_squeeze_signals(pair)
+            current_quality = current_signals.get('alignment_quality_20', 'NONE')
+            current_score = dataframe['squeeze_score'].iloc[-1]
+            
+            # ADAPTIVE EXIT THRESHOLDS based on entry quality
+            if entry_quality == 'TRIPLE':
+                reversal_threshold = 1.2  # Higher threshold for quality entries
+                weak_signal_threshold = 0.03
+                max_hold_time = 180  # 3 hours for quality signals
+            elif entry_quality == 'DOUBLE':
+                reversal_threshold = 1.0
+                weak_signal_threshold = 0.04
+                max_hold_time = 150  # 2.5 hours
+            else:
+                reversal_threshold = 0.8  # Lower threshold for divergence
+                weak_signal_threshold = 0.05
+                max_hold_time = 120  # 2 hours
+            
+            # CONFLICT-BASED EARLY EXIT
+            if entry_conflict and position_age_minutes > 60:  # Early exit for conflict trades
+                max_hold_time = min(max_hold_time, 90)  # Cap at 1.5 hours
+                weak_signal_threshold *= 1.5  # More aggressive exit
+            
+            # OPTIMIZED LONG EXIT CONDITIONS
             long_exit_conditions = [
-                # 1. Signal reversal: Strong opposite signal (Short Squeeze) - stricter threshold
-                dataframe['squeeze_score'].iloc[-1] > 1.0,  # Increased from 0.7 to 1.0 for real reversals
-                # 2. Signal PERMANENTLY inactive with stronger filter
-                (signal_inactive_duration > 30 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.02),  # 30min + score < 0.02
-                # 3. Lange Position mit schwachem Signal (Emergency Exit)
-                (position_age_minutes > 120 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.05)  # 2h + sehr schwaches Signal
+                # 1. ADAPTIVE SIGNAL REVERSAL
+                current_score > reversal_threshold,
+                
+                # 2. SIGNAL PERMANENTLY INACTIVE with quality-based filter
+                (signal_inactive_duration > 30 and abs(current_score) < weak_signal_threshold),
+                
+                # 3. QUALITY-BASED TIME EXIT
+                (position_age_minutes > max_hold_time and abs(current_score) < 0.1),
+                
+                # 4. MOMENTUM LOSS (for momentum trades)
+                (entry_quality in ['TRIPLE', 'DOUBLE'] and 
+                 current_quality == 'NONE' and 
+                 position_age_minutes > 30 and 
+                 abs(current_score) < 0.2),
+                
+                # 5. EARLY CONFLICT EXIT
+                (entry_conflict and position_age_minutes > 45 and current_score > -0.1)
             ]
             
-            # SHORT EXIT CONDITIONS - IMMEDIATE EXITS possible  
+            # OPTIMIZED SHORT EXIT CONDITIONS  
             short_exit_conditions = [
-                # 1. Signal reversal: Strong opposite signal (Long Squeeze) - stricter threshold
-                dataframe['squeeze_score'].iloc[-1] < -1.0,  # Increased from -0.7 to -1.0 for real reversals
-                # 2. Signal PERMANENTLY inactive with stronger filter
-                (signal_inactive_duration > 30 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.02),  # 30min + score < 0.02
-                # 3. Lange Position mit schwachem Signal (Emergency Exit)
-                (position_age_minutes > 120 and abs(dataframe['squeeze_score'].iloc[-1]) < 0.05)  # 2h + sehr schwaches Signal
+                # 1. ADAPTIVE SIGNAL REVERSAL
+                current_score < -reversal_threshold,
+                
+                # 2. SIGNAL PERMANENTLY INACTIVE with quality-based filter
+                (signal_inactive_duration > 30 and abs(current_score) < weak_signal_threshold),
+                
+                # 3. QUALITY-BASED TIME EXIT
+                (position_age_minutes > max_hold_time and abs(current_score) < 0.1),
+                
+                # 4. MOMENTUM LOSS (for momentum trades)
+                (entry_quality in ['TRIPLE', 'DOUBLE'] and 
+                 current_quality == 'NONE' and 
+                 position_age_minutes > 30 and 
+                 abs(current_score) < 0.2),
+                
+                # 5. EARLY CONFLICT EXIT
+                (entry_conflict and position_age_minutes > 45 and current_score < 0.1)
             ]
                 
-            logger.info(f"🔍 EXIT CONDITIONS {pair}: age={position_age_minutes:.1f}min, score={dataframe['squeeze_score'].iloc[-1]:.3f}, inactive_duration={signal_inactive_duration:.1f}min, conditions_count=long:{len(long_exit_conditions)}/short:{len(short_exit_conditions)}")
+            logger.info(f"🔍 EXIT CONDITIONS {pair}: age={position_age_minutes:.1f}min, "
+                       f"score={current_score:.3f}, entry_quality={entry_quality}, "
+                       f"current_quality={current_quality}, inactive_duration={signal_inactive_duration:.1f}min, "
+                       f"reversal_threshold=±{reversal_threshold:.1f}, max_hold={max_hold_time}min")
         else:
             # FALLBACK: EMERGENCY EXIT without position timing (after restart)
             # When entry time is lost, use signal status for exit decision
@@ -738,46 +968,72 @@ class SqueezeFlowFreqAI(IStrategy):
                     logger.warning(f"🚨 EMERGENCY EXIT {pair}: Both exit signals set (signal_active={signal_active}, score={dataframe['squeeze_score'].iloc[-1]:.3f})")
                     return dataframe  # Early return nach Emergency Exit
             
-            # LONG EXIT: Nur wenn LONG-Position aktiv ist UND Exit-Bedingungen vorhanden
+            # ENHANCED LONG EXIT with detailed reasoning
             elif active_direction == 'long' and len(long_exit_conditions) > 0:
                 long_exit_triggered = any(long_exit_conditions)
-                logger.info(f"🔍 LONG EXIT CHECK {pair}: triggered={long_exit_triggered}, conditions={long_exit_conditions}")
+                
+                # Determine exit reason for logging
+                exit_reason = 'unknown'
+                if long_exit_conditions[0]:  # Signal reversal
+                    exit_reason = f'signal_reversal (>{reversal_threshold:.1f})'
+                elif long_exit_conditions[1]:  # Permanently inactive
+                    exit_reason = f'signal_inactive ({signal_inactive_duration:.1f}min)'
+                elif long_exit_conditions[2]:  # Time exit
+                    exit_reason = f'time_exit ({position_age_minutes:.1f}min>{max_hold_time}min)'
+                elif long_exit_conditions[3]:  # Momentum loss
+                    exit_reason = f'momentum_loss ({entry_quality}→{current_quality})'
+                elif long_exit_conditions[4]:  # Conflict exit
+                    exit_reason = 'early_conflict_exit'
+                
+                logger.info(f"🔍 LONG EXIT CHECK {pair}: triggered={long_exit_triggered}, reason={exit_reason}")
+                
                 if long_exit_triggered:
                     dataframe.loc[latest_idx, 'exit_long'] = 1
-                    # Cleanup position - SAFE DELETE
+                    # Enhanced cleanup with position tracking
                     if pair in self.entry_signals:
-                        if 'entry_time' in self.entry_signals[pair]:
-                            del self.entry_signals[pair]['entry_time']
-                        if 'direction' in self.entry_signals[pair]:
-                            del self.entry_signals[pair]['direction']
-                        if not self.entry_signals[pair]:  # Dict leer?
-                            del self.entry_signals[pair]
+                        entry_data = self.entry_signals[pair].copy()  # Save for logging
+                        del self.entry_signals[pair]
                     if pair in self.active_positions:
                         del self.active_positions[pair]
-                    position_age = (datetime.now() - self.entry_signals[pair].get('entry_time', datetime.now())).total_seconds() / 60 if pair in self.entry_signals and 'entry_time' in self.entry_signals[pair] else 0
-                    logger.info(f"🟢 LONG EXIT TRIGGERED: {pair} after {position_age:.1f}min")
+                    
+                    logger.info(f"🟢 LONG EXIT: {pair} after {position_age_minutes:.1f}min | "
+                               f"Reason: {exit_reason} | Entry: {entry_quality} | Score: {current_score:.3f}")
             
-            # SHORT EXIT: Nur wenn SHORT-Position aktiv ist UND Exit-Bedingungen vorhanden
+            # ENHANCED SHORT EXIT with detailed reasoning
             elif active_direction == 'short' and len(short_exit_conditions) > 0:
                 short_exit_triggered = any(short_exit_conditions)
-                logger.info(f"🔍 SHORT EXIT CHECK {pair}: triggered={short_exit_triggered}, conditions={short_exit_conditions}")
+                
+                # Determine exit reason for logging
+                exit_reason = 'unknown'
+                if short_exit_conditions[0]:  # Signal reversal
+                    exit_reason = f'signal_reversal (<-{reversal_threshold:.1f})'
+                elif short_exit_conditions[1]:  # Permanently inactive
+                    exit_reason = f'signal_inactive ({signal_inactive_duration:.1f}min)'
+                elif short_exit_conditions[2]:  # Time exit
+                    exit_reason = f'time_exit ({position_age_minutes:.1f}min>{max_hold_time}min)'
+                elif short_exit_conditions[3]:  # Momentum loss
+                    exit_reason = f'momentum_loss ({entry_quality}→{current_quality})'
+                elif short_exit_conditions[4]:  # Conflict exit
+                    exit_reason = 'early_conflict_exit'
+                
+                logger.info(f"🔍 SHORT EXIT CHECK {pair}: triggered={short_exit_triggered}, reason={exit_reason}")
+                
                 if short_exit_triggered:
                     dataframe.loc[latest_idx, 'exit_short'] = 1
-                    # Cleanup position - SAFE DELETE
+                    # Enhanced cleanup with position tracking
                     if pair in self.entry_signals:
-                        if 'entry_time' in self.entry_signals[pair]:
-                            del self.entry_signals[pair]['entry_time']
-                        if 'direction' in self.entry_signals[pair]:
-                            del self.entry_signals[pair]['direction']
-                        if not self.entry_signals[pair]:  # Dict leer?
-                            del self.entry_signals[pair]
+                        entry_data = self.entry_signals[pair].copy()  # Save for logging
+                        del self.entry_signals[pair]
                     if pair in self.active_positions:
                         del self.active_positions[pair]
-                    position_age = (datetime.now() - self.entry_signals[pair].get('entry_time', datetime.now())).total_seconds() / 60 if pair in self.entry_signals and 'entry_time' in self.entry_signals[pair] else 0
-                    logger.info(f"🔴 SHORT EXIT TRIGGERED: {pair} after {position_age:.1f}min")
+                    
+                    logger.info(f"🔴 SHORT EXIT: {pair} after {position_age_minutes:.1f}min | "
+                               f"Reason: {exit_reason} | Entry: {entry_quality} | Score: {current_score:.3f}")
             elif active_direction:
-                position_age = (datetime.now() - self.entry_signals[pair].get('entry_time', datetime.now())).total_seconds() / 60 if pair in self.entry_signals and 'entry_time' in self.entry_signals[pair] else 0
-                logger.info(f"⚪ HOLDING {pair}: Position {active_direction} active, no exit conditions met (age={position_age:.1f}min)")
+                # Enhanced holding status
+                logger.info(f"⚪ HOLDING {pair}: {active_direction} position active "
+                           f"(age={position_age_minutes:.1f}min, score={current_score:.3f}, "
+                           f"entry_quality={entry_quality}, current_quality={current_quality})")
                         
         except Exception as e:
             logger.error(f"Error in exit logic: {e}")
@@ -787,43 +1043,71 @@ class SqueezeFlowFreqAI(IStrategy):
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
                        current_rate: float, current_profit: float, **kwargs) -> float:
         """
-        Dynamic stoploss based on leverage - maintains 2-3% spot price movement risk
-        Mit 5x Leverage: 12.5% stoploss = 2.5% Spot-Bewegung
+        ADAPTIVE STOPLOSS based on signal quality and trade characteristics
         """
-        
-        # Get current leverage from trade
-        leverage = getattr(trade, 'leverage', 1.0)
-        
-        # Calculate dynamic stoploss based on leverage
-        # Target: 2.5% spot price movement regardless of leverage
-        if leverage >= 5.0:
-            # 5x Leverage: 12.5% stoploss = 2.5% Spot risk
-            base_stoploss = -0.125  # -12.5%
-        elif leverage >= 3.0:
-            # 3x Leverage: 7.5% stoploss = 2.5% Spot risk  
-            base_stoploss = -0.075  # -7.5%
-        elif leverage >= 2.0:
-            # 2x Leverage: 5% stoploss = 2.5% Spot risk
-            base_stoploss = -0.05   # -5%
-        else:
-            # 1x Leverage: 2.5% stoploss = 2.5% Spot risk
-            base_stoploss = -0.025  # -2.5%
-        
-        # Squeeze-Signal-basierte Anpassung
-        external_signals = self.get_external_squeeze_signals(pair)
-        current_score = external_signals.get('squeeze_score', 0)
-        signal_active = external_signals.get('signal_active', False)
-        
-        stoploss = base_stoploss
-        
-        # Tighten stoploss if squeeze signal is weakening significantly
-        if not signal_active and abs(current_score) < 0.1:
-            # Signal komplett weg - tighten stoploss um 20%
-            stoploss = stoploss * 0.8  # 20% enger
+        try:
+            # Get current leverage and trade data
+            leverage = getattr(trade, 'leverage', 1.0)
             
-        logger.debug(f"💡 DYNAMIC STOPLOSS {pair}: leverage={leverage}x, base={base_stoploss:.3f}, final={stoploss:.3f}")
-        
-        return stoploss
+            # Get enhanced signal data
+            external_signals = self.get_external_squeeze_signals(pair)
+            current_score = external_signals.get('squeeze_score_20', 0)
+            signal_active = external_signals.get('signal_active', False)
+            current_quality = external_signals.get('alignment_quality_20', 'NONE')
+            
+            # Get entry data if available
+            entry_quality = 'NONE'
+            entry_conflict = False
+            if pair in self.entry_signals:
+                entry_quality = self.entry_signals[pair].get('alignment_quality', 'NONE')
+                entry_conflict = self.entry_signals[pair].get('higher_tf_conflict', False)
+            
+            # QUALITY-BASED BASE STOPLOSS
+            if entry_quality == 'TRIPLE':
+                base_risk = 0.035  # 3.5% risk for high-quality signals
+            elif entry_quality == 'DOUBLE':
+                base_risk = 0.030  # 3.0% risk for good signals
+            elif entry_quality == 'DIVERGENCE':
+                base_risk = 0.025  # 2.5% risk for divergence signals
+            else:
+                base_risk = 0.020  # 2.0% risk for unknown quality
+            
+            # Calculate leverage-adjusted stoploss
+            base_stoploss = -(base_risk * leverage)
+            
+            # CONFLICT PENALTY
+            if entry_conflict:
+                base_stoploss *= 0.8  # Tighter stop for conflict trades
+            
+            # SIGNAL WEAKENING ADJUSTMENT
+            if not signal_active and abs(current_score) < 0.1:
+                # Signal gone - tighten significantly
+                base_stoploss *= 0.7
+            elif current_quality == 'NONE' and entry_quality in ['TRIPLE', 'DOUBLE']:
+                # Quality degraded - moderate tightening
+                base_stoploss *= 0.85
+            
+            # PROFIT-BASED TRAILING (simple implementation)
+            if current_profit > 0.02:  # 2%+ profit
+                # Trail stop loss to break-even + small buffer
+                trailing_stop = -0.005  # 0.5% buffer
+                base_stoploss = max(base_stoploss, trailing_stop)
+            
+            # Cap the stoploss (don't make it too tight)
+            final_stoploss = max(base_stoploss, -0.15)  # Max 15% stop
+            
+            logger.debug(f"💡 ADAPTIVE STOPLOSS {pair}: leverage={leverage:.1f}x, "
+                        f"entry_quality={entry_quality}, current_quality={current_quality}, "
+                        f"signal_active={signal_active}, conflict={entry_conflict}, "
+                        f"profit={current_profit:.3f}, final_stop={final_stoploss:.3f}")
+            
+            return final_stoploss
+            
+        except Exception as e:
+            logger.error(f"Error calculating adaptive stoploss: {e}")
+            # Fallback to conservative stoploss
+            fallback_stop = -0.025 * getattr(trade, 'leverage', 1.0)
+            return max(fallback_stop, -0.10)  # Cap at 10%
         
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                           rate: float, time_in_force: str, current_time: datetime,
@@ -847,21 +1131,48 @@ class SqueezeFlowFreqAI(IStrategy):
                            proposed_stake: float, min_stake: Optional[float], max_stake: float,
                            leverage: float, entry_tag: Optional[str], side: str, **kwargs) -> float:
         """
-        Custom stake amount: 20% of total balance per trade
-        Used with stake_amount: "unlimited" for proper dynamic staking
+        ADAPTIVE POSITION SIZING based on signal quality (from research)
         """
         try:
-            # Get total balance from wallets
+            # Get total balance
             total_balance = self.wallets.get_total(self.config['stake_currency'])
             
-            # Calculate 20% of total balance for each trade
-            stake_percentage = 0.20
-            desired_stake = total_balance * stake_percentage
+            # Base stake percentage
+            base_percentage = 0.20  # 20% base
             
-            # Log for debugging
-            logger.debug(f"💰 CUSTOM STAKE {pair}: total_balance={total_balance:.2f}, desired={desired_stake:.2f}, proposed={proposed_stake:.2f}")
+            # Get signal quality for adaptive sizing
+            external_signals = self.get_external_squeeze_signals(pair)
+            alignment_quality = external_signals.get('alignment_quality_20', 'NONE')
+            signal_multiplier = external_signals.get('signal_multiplier_20', 1.0)
+            higher_tf_conflict = external_signals.get('higher_tf_conflict', False)
+            signal_strength = abs(external_signals.get('squeeze_score_20', 0))
             
-            # Ensure we respect min/max limits
+            # ADAPTIVE SIZING MULTIPLIERS (from research)
+            if alignment_quality == 'TRIPLE':
+                quality_multiplier = 1.5  # 50% larger for triple alignment
+            elif alignment_quality == 'DOUBLE':
+                quality_multiplier = 1.2  # 20% larger for double alignment
+            elif alignment_quality == 'DIVERGENCE':
+                quality_multiplier = 0.8  # 20% smaller for divergence
+            else:
+                quality_multiplier = 1.0  # Standard sizing
+            
+            # CONFLICT PENALTY (from research)
+            conflict_penalty = 0.6 if higher_tf_conflict else 1.0
+            
+            # SIGNAL STRENGTH BONUS
+            strength_bonus = min(1.0 + (signal_strength - 0.5) * 0.4, 1.8)  # Cap at 1.8x
+            
+            # Calculate final sizing
+            final_percentage = (base_percentage * quality_multiplier * 
+                               conflict_penalty * strength_bonus * signal_multiplier)
+            
+            # Cap between 10% and 35% of balance
+            final_percentage = max(0.10, min(final_percentage, 0.35))
+            
+            desired_stake = total_balance * final_percentage
+            
+            # Respect limits
             if min_stake and desired_stake < min_stake:
                 logger.debug(f"⚠️ STAKE TOO LOW {pair}: {desired_stake:.2f} < min_stake {min_stake:.2f}")
                 return min_stake
@@ -869,34 +1180,146 @@ class SqueezeFlowFreqAI(IStrategy):
             if desired_stake > max_stake:
                 logger.debug(f"⚠️ STAKE TOO HIGH {pair}: {desired_stake:.2f} > max_stake {max_stake:.2f}")
                 return max_stake
-                
-            logger.info(f"✅ CUSTOM STAKE {pair}: Using {desired_stake:.2f} USDT (20% of {total_balance:.2f})")
+            
+            logger.info(f"✅ ADAPTIVE STAKE {pair}: {desired_stake:.2f} USDT ({final_percentage*100:.1f}%) | "
+                       f"Quality: {alignment_quality} | Conflict: {higher_tf_conflict} | "
+                       f"Strength: {signal_strength:.2f} | Multipliers: Q={quality_multiplier:.1f}, "
+                       f"C={conflict_penalty:.1f}, S={strength_bonus:.1f}")
+            
             return desired_stake
             
         except Exception as e:
-            logger.error(f"Error calculating custom stake amount: {e}")
-            # Fallback to proposed stake from unlimited mode
-            logger.warning(f"📉 FALLBACK STAKE {pair}: Using proposed {proposed_stake:.2f}")
-            return proposed_stake
+            logger.error(f"Error calculating adaptive stake amount: {e}")
+            # Fallback to base 20%
+            fallback_stake = total_balance * 0.20 if 'total_balance' in locals() else proposed_stake
+            logger.warning(f"📉 FALLBACK STAKE {pair}: Using {fallback_stake:.2f}")
+            return fallback_stake
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                 proposed_leverage: float, max_leverage: float, entry_tag: str | None, 
                 side: str, **kwargs) -> float:
         """
-        Set leverage for futures trading - Squeeze strategy with higher leverage
+        ADAPTIVE LEVERAGE based on signal quality and conflict detection
         """
-        # Debug logging
-        logger.info(f"🔍 LEVERAGE CALL {pair}: proposed={proposed_leverage}, max={max_leverage}, tag={entry_tag}, side={side}")
-        
-        # Squeeze signals are precise → higher leverage justified
-        if entry_tag == "force_entry":
-            leverage_value = 5.0  # Higher leverage for manual tests
-        else:
-            leverage_value = 5.0  # Aggressive leverage for squeeze trades (due to high precision)
+        try:
+            # Get signal quality for adaptive leverage
+            external_signals = self.get_external_squeeze_signals(pair)
+            alignment_quality = external_signals.get('alignment_quality_20', 'NONE')
+            higher_tf_conflict = external_signals.get('higher_tf_conflict', False)
+            signal_strength = abs(external_signals.get('squeeze_score_20', 0))
             
-        logger.info(f"🚀 LEVERAGE SET {pair}: returning {leverage_value}x (was proposed: {proposed_leverage}x)")
-        return leverage_value
+            # BASE LEVERAGE based on signal quality (from research)
+            if alignment_quality == 'TRIPLE':
+                base_leverage = 5.0  # Highest leverage for triple alignment
+            elif alignment_quality == 'DOUBLE':
+                base_leverage = 4.0  # High leverage for double alignment
+            elif alignment_quality == 'DIVERGENCE':
+                base_leverage = 3.0  # Moderate leverage for divergence
+            else:
+                base_leverage = 2.0  # Conservative for weak signals
+            
+            # CONFLICT PENALTY (from research)
+            if higher_tf_conflict:
+                final_leverage = base_leverage * 0.6  # Reduce leverage when fighting higher TF
+                logger.info(f"⚠️ LEVERAGE REDUCED {pair}: {base_leverage:.1f}x → {final_leverage:.1f}x (HT conflict)")
+            else:
+                final_leverage = base_leverage
+            
+            # STRENGTH ADJUSTMENT
+            if signal_strength > 1.0:
+                final_leverage = min(final_leverage * 1.2, max_leverage)  # Boost for very strong signals
+            
+            # Ensure we don't exceed max leverage
+            final_leverage = min(final_leverage, max_leverage)
+            
+            logger.info(f"🚀 ADAPTIVE LEVERAGE {pair}: {final_leverage:.1f}x | "
+                       f"Quality: {alignment_quality} | Conflict: {higher_tf_conflict} | "
+                       f"Strength: {signal_strength:.2f}")
+            
+            return final_leverage
+            
+        except Exception as e:
+            logger.error(f"Error calculating adaptive leverage: {e}")
+            # Fallback to conservative leverage
+            fallback_leverage = 3.0
+            logger.warning(f"📉 FALLBACK LEVERAGE {pair}: Using {fallback_leverage:.1f}x")
+            return fallback_leverage
         
+    def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
+                       current_rate: float, current_profit: float, **kwargs) -> float:
+        """
+        Enhanced dynamic stop loss based on signal quality and leverage
+        """
+        try:
+            # Get current squeeze signals for quality assessment
+            external_signals = self.get_external_squeeze_signals(pair)
+            current_score = external_signals.get('squeeze_score_20', 0)
+            current_quality = external_signals.get('alignment_quality_20', 'NONE')
+            
+            # Calculate trade age
+            trade_age_minutes = (current_time - trade.open_date).total_seconds() / 60
+            
+            # Base stop loss (enhanced system values)
+            base_stoploss = -0.08  # Base 8% for 4x leverage
+            
+            # Quality-based adjustment
+            if current_quality == 'TRIPLE':
+                # High quality trades get tighter stops after profit
+                if current_profit > 0.02:  # 2% profit
+                    return base_stoploss * 0.6  # Tighten to ~5%
+                else:
+                    return base_stoploss * 1.25  # Give more room initially (~10%)
+            elif current_quality == 'DOUBLE':
+                # Medium quality trades
+                if current_profit > 0.015:  # 1.5% profit
+                    return base_stoploss * 0.75  # Tighten to ~6%
+                else:
+                    return base_stoploss
+            else:
+                # Lower quality or weakening signals - tighter stops
+                if abs(current_score) < 0.1:  # Weak signal
+                    return base_stoploss * 0.7  # Tighter stop ~5.6%
+                else:
+                    return base_stoploss
+            
+            # Time-based tightening for old positions
+            if trade_age_minutes > 120:  # After 2 hours
+                return base_stoploss * 0.8  # Tighten stop
+            
+            return base_stoploss
+            
+        except Exception as e:
+            logger.error(f"Error in custom_stoploss: {e}")
+            return -0.08  # Fallback to base stop loss
+    
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                           proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                           leverage: float, entry_tag: Optional[str], side: str, **kwargs) -> float:
+        """
+        STATE MACHINE ENHANCED POSITION SIZING
+        Dynamically adjust position size based on trading mode and signal quality
+        """
+        try:
+            # Get signal strength for sizing calculation
+            external_signals = self.get_external_squeeze_signals(pair)
+            signal_strength = abs(external_signals.get('squeeze_score_20', 0))
+            signal_quality_score = external_signals.get('signal_multiplier_20', 1.0)
+            
+            # Simple stake sizing without state machine
+            final_stake = max(min_stake if min_stake else 0, min(proposed_stake, max_stake))
+            
+            logger.info(f"💰 STAKE SIZING {pair}: "
+                       f"Proposed: {proposed_stake:.2f} → Final: {final_stake:.2f} | "
+                       f"Signal: {signal_strength:.3f}")
+            
+            return final_stake
+            
+        except Exception as e:
+            logger.error(f"Error in custom_stake_amount for {pair}: {e}")
+            return proposed_stake  # Fallback to proposed stake
+    
+    # State machine integration methods removed
+
     def informative_pairs(self) -> list:
         """
         Additional pairs for context

@@ -19,9 +19,11 @@ import json
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.storage.influxdb_handler import InfluxDBHandler
 from indicators.squeeze_score_calculator import SqueezeScoreCalculator
 from utils.exchange_mapper import exchange_mapper
+
+# State machine removed - not required for core functionality
+STATE_MACHINE_AVAILABLE = False
 
 
 class SqueezeFlowCalculatorService:
@@ -41,11 +43,13 @@ class SqueezeFlowCalculatorService:
         self.calculation_interval = 60  # seconds
         # Dynamic symbol discovery from database - no more hardcoded symbols!
         self.symbols = self.discover_active_symbols()
-        # Erweiterte Timeframes für bessere Squeeze-Erkennung
-        # Entry: 5,10,15,30min für schnelle Reaktion
-        # Primär: 60,120,240min (1h,2h,4h) für echte Squeeze-Signale  
-        # Bestätigung: 30,60min für Entry-Timing
-        self.lookback_periods = [5, 10, 15, 30, 60, 120, 240]  # Multiple timeframes erweitert
+        # Enhanced timeframes for optimized squeeze detection
+        # Entry: 5,10,15,30min for fast reaction
+        # Primary: 60,120,240min (1h,2h,4h) for real squeeze signals  
+        # Confirmation: 30,60min for entry timing
+        self.lookback_periods = [5, 10, 15, 30, 60, 120, 240]  # Enhanced multi-timeframe system
+        
+        # State machine integration removed
         
     def setup_logging(self):
         """Setup logging configuration"""
@@ -86,8 +90,9 @@ class SqueezeFlowCalculatorService:
         from influxdb import InfluxDBClient
         
         # Connect to the actual InfluxDB database - use environment variable for host
+        influx_host = os.getenv('INFLUX_HOST', 'localhost' if not os.path.exists('/.dockerenv') else 'aggr-influx')
         self.influx_client = InfluxDBClient(
-            host=os.getenv('INFLUX_HOST', 'aggr-influx'),  # InfluxDB container name
+            host=influx_host,  # Use localhost for local testing, aggr-influx for Docker
             port=int(os.getenv('INFLUX_PORT', 8086)),
             database='significant_trades'  # This is where the real data is!
         )
@@ -101,6 +106,8 @@ class SqueezeFlowCalculatorService:
             raise ConnectionError(f"InfluxDB connection failed: {e}")
         
         self.logger.info("InfluxDB connection established")
+    
+    # State machine setup removed
         
     def setup_redis(self):
         """Setup Redis connection"""
@@ -116,47 +123,15 @@ class SqueezeFlowCalculatorService:
             raise
             
     def setup_calculator(self):
-        """Setup squeeze score calculator"""
+        """Setup squeeze score calculator with simplified divergence mode"""
         self.calculator = SqueezeScoreCalculator(
             price_weight=0.3,
             spot_cvd_weight=0.35,
             futures_cvd_weight=0.35,
-            smoothing_period=5
+            smoothing_period=5,
+            enable_simplified_mode=True  # Enable simplified divergence detection from user's visual analysis
         )
         
-    async def get_market_data(self, symbol: str, timeframe: str = '1m', 
-                             limit: int = 100) -> Optional[pd.DataFrame]:
-        """
-        Get market data from InfluxDB
-        """
-        try:
-            query = f"""
-            SELECT mean(price) as price, sum(volume) as volume, 
-                   last(cvd_spot) as cvd_spot, last(cvd_perp) as cvd_perp,
-                   last(oi_value) as oi_value
-            FROM market_data
-            WHERE symbol = '{symbol}'
-            AND time >= now() - {limit}m
-            GROUP BY time({timeframe})
-            ORDER BY time DESC
-            LIMIT {limit}
-            """
-            
-            result = self.influx_handler.client.query(query)
-            points = list(result.get_points())
-            
-            if not points:
-                return None
-                
-            df = pd.DataFrame(points)
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-            
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error getting market data for {symbol}: {e}")
-            return None
             
     async def calculate_cvd_aggregates(self, symbol: str) -> Tuple[Optional[pd.Series], Optional[pd.Series]]:
         """
@@ -353,8 +328,12 @@ class SqueezeFlowCalculatorService:
                 self.logger.error(f"❌ Error calculating squeeze signal for {symbol} lookback {lookback}: {e}")
                 import traceback
                 self.logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        
+        # State machine mode detection removed
                 
         return signals
+    
+    # State machine mode detection method removed
         
     async def store_signals(self, signals: List[Dict]):
         """
@@ -423,6 +402,8 @@ class SqueezeFlowCalculatorService:
                 
                 # Cache for 5 minutes
                 self.redis_client.setex(key, 300, value)
+            
+            # State machine mode caching removed
                 
         except Exception as e:
             self.logger.error(f"Error caching signals: {e}")

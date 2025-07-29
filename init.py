@@ -32,7 +32,6 @@ class SqueezeFlowInitializer:
         self.required_dirs = [
             "config",
             "data/influxdb",
-            "data/grafana", 
             "data/redis",
             "data/freqtrade",
             "data/logs",
@@ -416,10 +415,148 @@ OKX_PASSPHRASE=
             
             print("  ✓ InfluxDB database initialized")
             
+            # Setup retention policies and continuous queries
+            self._setup_influxdb_policies_and_queries()
+            
         except subprocess.CalledProcessError as e:
             print(f"  ⚠️  Docker services initialization failed: {e}")
         except FileNotFoundError:
             print("  ⚠️  Docker Compose not available")
+    
+    def _setup_influxdb_policies_and_queries(self):
+        """Setup InfluxDB retention policies and continuous queries using industry standards"""
+        print("🗄️  Setting up InfluxDB retention policies and continuous queries...")
+        
+        try:
+            import time
+            time.sleep(5)  # Allow InfluxDB to fully initialize
+            
+            # 1. Setup retention policies for efficient storage management
+            retention_policies = [
+                # 30-day retention for 1-minute data (extended from default 3.5 days)
+                "ALTER RETENTION POLICY \"aggr_1m\" ON \"significant_trades\" DURATION 30d",
+                # Longer retention for aggregated data
+                "ALTER RETENTION POLICY \"aggr_5m\" ON \"significant_trades\" DURATION 90d",
+                "ALTER RETENTION POLICY \"aggr_15m\" ON \"significant_trades\" DURATION 180d",
+                "ALTER RETENTION POLICY \"aggr_30m\" ON \"significant_trades\" DURATION 365d",
+                "ALTER RETENTION POLICY \"aggr_1h\" ON \"significant_trades\" DURATION 730d",
+                "ALTER RETENTION POLICY \"aggr_4h\" ON \"significant_trades\" DURATION 1825d",
+                "ALTER RETENTION POLICY \"aggr_1d\" ON \"significant_trades\" DURATION 0s"  # Infinite retention for daily data
+            ]
+            
+            print("    📊 Updating retention policies...")
+            for policy in retention_policies:
+                subprocess.run([
+                    "docker-compose", "exec", "-T", "aggr-influx",
+                    "influx", "-database", "significant_trades", "-execute", policy
+                ], check=False, cwd=self.project_root, capture_output=True)
+            
+            print("    ✓ Retention policies updated")
+            
+            # 2. Check existing continuous queries to avoid duplicates
+            result = subprocess.run([
+                "docker-compose", "exec", "-T", "aggr-influx",
+                "influx", "-database", "significant_trades", "-execute", "SHOW CONTINUOUS QUERIES"
+            ], capture_output=True, text=True, cwd=self.project_root)
+            
+            existing_cqs = result.stdout if result.returncode == 0 else ""
+            
+            # 3. Create missing continuous queries (industry-standard OHLCV aggregation)
+            continuous_queries = [
+                # 2h aggregation (missing from current setup)
+                {
+                    "name": "cq_2h",
+                    "query": """CREATE CONTINUOUS QUERY "cq_2h" ON "significant_trades"
+                    RESAMPLE EVERY 15m FOR 4h
+                    BEGIN
+                      SELECT first(open) AS open, max(high) AS high, min(low) AS low, last(close) AS close,
+                             sum(vbuy) AS vbuy, sum(vsell) AS vsell, sum(cbuy) AS cbuy, sum(csell) AS csell,
+                             sum(lbuy) AS lbuy, sum(lsell) AS lsell
+                      INTO "aggr_2h"."trades_2h"
+                      FROM "aggr_1m"."trades_1m"
+                      GROUP BY time(2h), *
+                    END"""
+                },
+                # 6h aggregation
+                {
+                    "name": "cq_6h", 
+                    "query": """CREATE CONTINUOUS QUERY "cq_6h" ON "significant_trades"
+                    RESAMPLE EVERY 1h FOR 12h
+                    BEGIN
+                      SELECT first(open) AS open, max(high) AS high, min(low) AS low, last(close) AS close,
+                             sum(vbuy) AS vbuy, sum(vsell) AS vsell, sum(cbuy) AS cbuy, sum(csell) AS csell,
+                             sum(lbuy) AS lbuy, sum(lsell) AS lsell
+                      INTO "aggr_6h"."trades_6h"
+                      FROM "aggr_1m"."trades_1m"
+                      GROUP BY time(6h), *
+                    END"""
+                },
+                # 12h aggregation
+                {
+                    "name": "cq_12h",
+                    "query": """CREATE CONTINUOUS QUERY "cq_12h" ON "significant_trades"
+                    RESAMPLE EVERY 1h FOR 24h
+                    BEGIN
+                      SELECT first(open) AS open, max(high) AS high, min(low) AS low, last(close) AS close,
+                             sum(vbuy) AS vbuy, sum(vsell) AS vsell, sum(cbuy) AS cbuy, sum(csell) AS csell,
+                             sum(lbuy) AS lbuy, sum(lsell) AS lsell
+                      INTO "aggr_12h"."trades_12h"
+                      FROM "aggr_1m"."trades_1m"
+                      GROUP BY time(12h), *
+                    END"""
+                },
+                # 1d (24h) aggregation
+                {
+                    "name": "cq_1d",
+                    "query": """CREATE CONTINUOUS QUERY "cq_1d" ON "significant_trades"
+                    RESAMPLE EVERY 2h FOR 48h
+                    BEGIN
+                      SELECT first(open) AS open, max(high) AS high, min(low) AS low, last(close) AS close,
+                             sum(vbuy) AS vbuy, sum(vsell) AS vsell, sum(cbuy) AS cbuy, sum(csell) AS csell,
+                             sum(lbuy) AS lbuy, sum(lsell) AS lsell
+                      INTO "aggr_1d"."trades_1d"
+                      FROM "aggr_1m"."trades_1m"
+                      GROUP BY time(1d), *
+                    END"""
+                }
+            ]
+            
+            print("    🔄 Creating missing continuous queries...")
+            queries_created = 0
+            for cq in continuous_queries:
+                if cq["name"] not in existing_cqs:
+                    result = subprocess.run([
+                        "docker-compose", "exec", "-T", "aggr-influx",
+                        "influx", "-database", "significant_trades", "-execute", cq["query"]
+                    ], check=False, cwd=self.project_root, capture_output=True)
+                    
+                    if result.returncode == 0:
+                        queries_created += 1
+                        print(f"      ✓ Created {cq['name']}")
+                    else:
+                        print(f"      ⚠️  Failed to create {cq['name']}: {result.stderr.decode() if result.stderr else 'Unknown error'}")
+                else:
+                    print(f"      ⏭️  {cq['name']} already exists")
+            
+            if queries_created > 0:
+                print(f"    ✅ Created {queries_created} new continuous queries")
+            else:
+                print("    ℹ️  All continuous queries already exist")
+            
+            # 4. Verify setup
+            print("    🔍 Verifying setup...")
+            subprocess.run([
+                "docker-compose", "exec", "-T", "aggr-influx",
+                "influx", "-database", "significant_trades", "-execute", "SHOW MEASUREMENTS"
+            ], check=False, cwd=self.project_root, capture_output=True)
+            
+            print("  ✅ InfluxDB setup completed with industry-standard configuration")
+            print("     📊 Retention: 1m(30d) → 5m(90d) → 15m(180d) → 1h(2y) → 1d(∞)")
+            print("     🔄 Continuous queries: 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d")
+            
+        except Exception as e:
+            print(f"    ⚠️  InfluxDB setup warning: {e}")
+            print("     💡 You can run this setup manually later if needed")
     
     def _validate_setup(self):
         """Validate the setup"""

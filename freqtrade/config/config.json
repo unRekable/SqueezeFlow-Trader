@@ -4,7 +4,7 @@
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
-    "timeframe": "1m",
+    "timeframe": "15m",
     "dry_run": true,
     "trading_mode": "futures",
     "margin_mode": "isolated",
@@ -105,7 +105,7 @@
     "initial_state": "running",
     "force_entry_enable": true,
     "internals": {
-        "process_throttle_secs": 5
+        "process_throttle_secs": 1
     },
     "strategy": "SqueezeFlowFreqAI",
     "strategy_path": "user_data/strategies",
@@ -124,7 +124,7 @@
         "data_kitchen_thread_count": 2,
         "activate_tensorboard": false,
         "feature_parameters": {
-            "include_timeframes": ["1m", "5m"],
+            "include_timeframes": ["15m", "1h"],
             "include_corr_pairlist": [],
             "label_period_candles": 10,
             "include_shifted_candles": 1,

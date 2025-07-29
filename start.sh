@@ -29,9 +29,8 @@ fi
 
 # Create necessary directories
 echo -e "${YELLOW}📁 Creating directories...${NC}"
-mkdir -p data/{influxdb,grafana,redis,freqtrade,logs}
+mkdir -p data/{influxdb,redis,freqtrade,logs}
 mkdir -p freqtrade/user_data/{logs,strategies,data}
-mkdir -p config/grafana/{provisioning,dashboards}
 
 # Set permissions
 chmod +x start.sh stop.sh
@@ -64,19 +63,15 @@ echo -e "${YELLOW}🔧 Building and starting services...${NC}"
 
 # Start infrastructure services first
 echo -e "${YELLOW}📊 Starting infrastructure services...${NC}"
-docker-compose up -d influxdb redis
+docker-compose up -d aggr-influx redis
 
 # Wait for InfluxDB to be ready
 echo -e "${YELLOW}⏳ Waiting for InfluxDB to be ready...${NC}"
 sleep 10
 
-# Initialize InfluxDB database
-echo -e "${YELLOW}🗄️  Initializing InfluxDB database...${NC}"
-docker-compose exec influxdb influx -execute "CREATE DATABASE IF NOT EXISTS significant_trades"
-
-# Start monitoring services
-echo -e "${YELLOW}📈 Starting monitoring services...${NC}"
-docker-compose up -d grafana
+# Initialize InfluxDB database with advanced setup
+echo -e "${YELLOW}🗄️  Initializing InfluxDB with retention policies and continuous queries...${NC}"
+python3 init.py --mode production --force
 
 # Start aggr-server
 echo -e "${YELLOW}📡 Starting aggr-server...${NC}"
@@ -110,10 +105,10 @@ docker-compose ps
 
 echo ""
 echo "Access URLs:"
-echo -e "${GREEN}🌐 Grafana Dashboard: http://localhost:3000 (admin/squeezeflow123)${NC}"
 echo -e "${GREEN}🤖 Freqtrade API: http://localhost:8080 (squeezeflow/squeezeflow123)${NC}"
 echo -e "${GREEN}📊 Freqtrade UI: http://localhost:8081${NC}"
-echo -e "${GREEN}📡 aggr-server: http://localhost:3001${NC}"
+echo -e "${GREEN}📡 aggr-server: http://localhost:3000${NC}"
+echo -e "${GREEN}📈 Chronograf (InfluxDB UI): http://localhost:8885${NC}"
 
 echo ""
 echo "System Information:"

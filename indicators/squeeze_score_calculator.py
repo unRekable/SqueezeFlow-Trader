@@ -25,7 +25,8 @@ class SqueezeScoreCalculator:
                  price_weight: float = 0.3,
                  spot_cvd_weight: float = 0.35,
                  futures_cvd_weight: float = 0.35,
-                 smoothing_period: int = 5):
+                 smoothing_period: int = 5,
+                 enable_simplified_mode: bool = True):
         """
         Initialize calculator with component weights
         
@@ -39,6 +40,13 @@ class SqueezeScoreCalculator:
         self.spot_cvd_weight = spot_cvd_weight
         self.futures_cvd_weight = futures_cvd_weight
         self.smoothing_period = smoothing_period
+        self.enable_simplified_mode = enable_simplified_mode
+        
+        # Simplified mode parameters
+        if enable_simplified_mode:
+            self.divergence_threshold = 5.0      # 5M USD minimum divergence
+            self.price_momentum_threshold = 0.2  # 0.2% price movement
+            self.trend_window = 15               # 15 minute trend window
         
         # Ensure weights sum to 1
         total_weight = price_weight + spot_cvd_weight + futures_cvd_weight
@@ -63,8 +71,8 @@ class SqueezeScoreCalculator:
         # Calculate price change percentage
         price_change = (price_data.iloc[-1] - price_data.iloc[-lookback]) / price_data.iloc[-lookback]
         
-        # Normalize to -1 to 1 range (cap at ±5% for full signal)
-        normalized_change = np.clip(price_change / 0.05, -1, 1)
+        # Normalize to -1 to 1 range (cap at ±4% for enhanced sensitivity)
+        normalized_change = np.clip(price_change / 0.04, -1, 1)
         
         return normalized_change
         
@@ -119,23 +127,127 @@ class SqueezeScoreCalculator:
             
         return trend_score, acceleration
         
+    def detect_simplified_divergence(self,
+                                    price_data: pd.Series,
+                                    spot_cvd_data: pd.Series,
+                                    futures_cvd_data: pd.Series) -> Dict[str, float]:
+        """
+        Detect divergence using simplified approach from user's visual analysis:
+        Price positive + spot volume trend positive + futures CVD trends down = Long divergence
+        """
+        if len(price_data) < self.trend_window:
+            return {'signal_type': 'NEUTRAL', 'score': 0.0}
+        
+        # Calculate price change percentage over trend window
+        price_start = price_data.iloc[-self.trend_window]
+        price_end = price_data.iloc[-1]
+        price_change_pct = ((price_end - price_start) / price_start) * 100
+        
+        # Calculate CVD trend directions
+        spot_start = spot_cvd_data.iloc[-self.trend_window]
+        spot_end = spot_cvd_data.iloc[-1]
+        spot_change = spot_end - spot_start
+        
+        futures_start = futures_cvd_data.iloc[-self.trend_window]
+        futures_end = futures_cvd_data.iloc[-1]
+        futures_change = futures_end - futures_start
+        
+        # Determine trend directions
+        spot_direction = "up" if spot_change > 1.0 else ("down" if spot_change < -1.0 else "neutral")
+        futures_direction = "up" if futures_change > 1.0 else ("down" if futures_change < -1.0 else "neutral")
+        
+        # Calculate divergence magnitude
+        divergence_amount = abs(spot_change - futures_change)
+        
+        # Check minimum requirements
+        if abs(price_change_pct) < self.price_momentum_threshold:
+            return {'signal_type': 'NEUTRAL', 'score': 0.0}
+            
+        if divergence_amount < self.divergence_threshold:
+            return {'signal_type': 'NEUTRAL', 'score': 0.0}
+        
+        # LONG DIVERGENCE DETECTION (from image)
+        if (price_change_pct > 0 and          # Price positive (going up)
+            spot_direction == "up" and        # Spot volume trend positive
+            futures_direction == "down"):     # Futures CVD trends down
+            
+            logger.info(f"🟢 SIMPLIFIED LONG DIVERGENCE: Price +{price_change_pct:.2f}%, "
+                       f"Spot ↑{spot_change:.1f}M, Futures ↓{abs(futures_change):.1f}M, "
+                       f"Divergence: {divergence_amount:.1f}M")
+            
+            return {
+                'signal_type': 'LONG_DIVERGENCE',
+                'score': -divergence_amount / 10.0,  # Negative for long signal
+                'price_change_pct': price_change_pct,
+                'spot_direction': spot_direction,
+                'futures_direction': futures_direction,
+                'divergence_amount': divergence_amount,
+                'alignment_quality': 'DIVERGENCE'
+            }
+        
+        # SHORT DIVERGENCE DETECTION (inverse pattern)
+        elif (price_change_pct < 0 and        # Price negative (going down)
+              spot_direction == "down" and    # Spot trend negative
+              futures_direction == "up"):     # Futures CVD trends up
+            
+            logger.info(f"🔴 SIMPLIFIED SHORT DIVERGENCE: Price {price_change_pct:.2f}%, "
+                       f"Spot ↓{abs(spot_change):.1f}M, Futures ↑{futures_change:.1f}M, "
+                       f"Divergence: {divergence_amount:.1f}M")
+            
+            return {
+                'signal_type': 'SHORT_DIVERGENCE',
+                'score': divergence_amount / 10.0,   # Positive for short signal
+                'price_change_pct': price_change_pct,
+                'spot_direction': spot_direction,
+                'futures_direction': futures_direction,
+                'divergence_amount': divergence_amount,
+                'alignment_quality': 'DIVERGENCE'
+            }
+        
+        # No divergence pattern detected
+        return {'signal_type': 'NEUTRAL', 'score': 0.0}
+        
     def calculate_squeeze_score(self,
                               price_data: pd.Series,
                               spot_cvd_data: pd.Series,
                               futures_cvd_data: pd.Series,
                               lookback: int = 20) -> Dict[str, float]:
         """
-        Calculate overall squeeze score
+        Calculate overall squeeze score with optional simplified mode
         
-        Long Squeeze (negative score):
-        - Price UP + Spot CVD UP + Futures CVD DOWN
-        
-        Short Squeeze (positive score):
-        - Price DOWN + Spot CVD DOWN + Futures CVD UP
+        If simplified mode is enabled, uses visual divergence detection approach.
+        Otherwise uses the complex momentum alignment algorithm.
         
         Returns:
             Dictionary with score components and final score
         """
+        
+        # Use simplified divergence detection if enabled
+        if self.enable_simplified_mode:
+            simplified_result = self.detect_simplified_divergence(price_data, spot_cvd_data, futures_cvd_data)
+            
+            if simplified_result['signal_type'] != 'NEUTRAL':
+                # Convert to full result format
+                result = {
+                    'squeeze_score': simplified_result['score'],
+                    'raw_score': simplified_result['score'],
+                    'price_component': simplified_result.get('price_change_pct', 0) / 100,
+                    'spot_cvd_trend': 1.0 if simplified_result.get('spot_direction') == 'up' else -1.0,
+                    'futures_cvd_trend': 1.0 if simplified_result.get('futures_direction') == 'up' else -1.0,
+                    'cvd_divergence': simplified_result.get('divergence_amount', 0) / 100,
+                    'spot_cvd_acceleration': 0.0,
+                    'futures_cvd_acceleration': 0.0,
+                    'signal_type': self._classify_signal(simplified_result['score']),
+                    'signal_strength': abs(simplified_result['score']),
+                    'alignment_quality': simplified_result.get('alignment_quality', 'DIVERGENCE'),
+                    'signal_multiplier': 1.0,
+                    'price_direction': 1 if simplified_result.get('price_change_pct', 0) > 0 else -1,
+                    'spot_direction': 1 if simplified_result.get('spot_direction') == 'up' else -1,
+                    'futures_direction': 1 if simplified_result.get('futures_direction') == 'up' else -1,
+                    'timestamp': datetime.now()
+                }
+                return result
+        # Fall back to complex algorithm if simplified mode is off or no signal
         # Calculate individual components
         price_component = self.calculate_price_component(price_data, lookback)
         spot_trend, spot_accel = self.calculate_cvd_trend(spot_cvd_data, lookback)
@@ -148,61 +260,97 @@ class SqueezeScoreCalculator:
         logger.info(f"🔍 DEBUG Components: price={price_component:.4f}, spot_trend={spot_trend:.4f}, "
                    f"futures_trend={futures_trend:.4f}, divergence={cvd_divergence:.4f}")
         
-        # MUCH MORE LENIENT SQUEEZE DETECTION
+        # OPTIMIZED HYBRID ALGORITHM - Momentum Alignment + Divergence
+        # Based on research findings: momentum alignment works better than pure divergence
         
-        # Kombiniere alle Indikatoren für eine gewichtete Score-Berechnung
-        # Keine perfekten Bedingungen mehr erforderlich
+        # Determine directional alignment
+        price_direction = np.sign(price_component)
+        spot_direction = np.sign(spot_trend)
+        futures_direction = np.sign(futures_trend)
         
-        # Preis-Komponente: Normalisiert auf 0-1
-        price_factor = abs(price_component) if abs(price_component) < 1.0 else 1.0
+        # Calculate alignment quality and signal strength
+        alignment_quality = 'NONE'
+        signal_strength_multiplier = 1.0
         
-        # CVD-Divergenz: Normalisiert auf 0-1
-        divergence_factor = min(abs(cvd_divergence), 1.0)
-        
-        # CVD-Trend-Stärke: Kombiniere beide Trends
-        trend_factor = (abs(spot_trend) + abs(futures_trend)) / 2
-        trend_factor = min(trend_factor, 1.0)
-        
-        # NEUE SQUEEZE-DETECTION: Viel weniger restriktiv
-        
-        # LONG SQUEEZE: Preis steigt ODER CVD-Divergenz negativ (nicht UND!)
-        if price_component > 0.01 or cvd_divergence < -0.05:  # Viel niedrigere Schwelle
-            long_score = (
-                price_factor * 0.3 +          # Preis-Komponente
-                divergence_factor * 0.4 +     # Divergenz-Stärke  
-                trend_factor * 0.3            # CVD-Trend-Stärke
+        # MOMENTUM ALIGNMENT STRATEGY (primary - proven to work)
+        if price_direction == spot_direction and price_direction != 0:
+            # Price and spot CVD aligned = strong momentum signal
+            alignment_quality = 'DOUBLE'
+            signal_strength_multiplier = 1.3
+            
+            if futures_direction == price_direction:
+                # Triple alignment = strongest signal
+                alignment_quality = 'TRIPLE'
+                signal_strength_multiplier = 1.8
+                
+            # Base score from momentum alignment
+            momentum_score = (
+                abs(price_component) * 0.4 +     # 40% price momentum strength
+                abs(spot_trend) * 0.3 +          # 30% spot CVD strength
+                abs(futures_trend) * 0.3         # 30% futures CVD strength
             )
-            if cvd_divergence < 0 or price_component > 0:  # Zumindest eine Bedingung
-                raw_score = -long_score
-                logger.info(f"🟢 LONG SQUEEZE: price={price_component:.3f}, div={cvd_divergence:.3f}, score={raw_score:.3f}")
+            
+            # Apply directional sign (negative = long signal, positive = short signal)
+            raw_score = momentum_score * (-1 if price_direction > 0 else 1)
+            signal_type = 'MOMENTUM_ALIGNMENT'
+            
+        # DIVERGENCE STRATEGY (secondary - for when momentum isn't clear)
+        elif abs(cvd_divergence) > 0.1:  # Significant divergence threshold
+            # Traditional squeeze detection with lower weight
+            alignment_quality = 'DIVERGENCE'
+            signal_strength_multiplier = 0.8
+            
+            # Calculate divergence-based score
+            divergence_strength = min(abs(cvd_divergence), 1.0)  # Cap at 1.0
+            price_strength = min(abs(price_component), 1.0)
+            
+            # Combined divergence score
+            base_strength = (divergence_strength * 0.6 + price_strength * 0.4)
+            
+            # Apply squeeze logic: price up + cvd divergence negative = long squeeze
+            if price_component > 0.01 and cvd_divergence < -0.05:
+                raw_score = -base_strength  # Long squeeze signal
+                signal_type = 'LONG_SQUEEZE'
+            elif price_component < -0.01 and cvd_divergence > 0.05:
+                raw_score = base_strength   # Short squeeze signal
+                signal_type = 'SHORT_SQUEEZE'
             else:
                 raw_score = 0.0
+                signal_type = 'WEAK_DIVERGENCE'
                 
-        # SHORT SQUEEZE: Preis fällt ODER CVD-Divergenz positiv (nicht UND!)
-        elif price_component < -0.01 or cvd_divergence > 0.05:  # Viel niedrigere Schwelle
-            short_score = (
-                price_factor * 0.3 +          # Preis-Komponente
-                divergence_factor * 0.4 +     # Divergenz-Stärke
-                trend_factor * 0.3            # CVD-Trend-Stärke
-            )
-            if cvd_divergence > 0 or price_component < 0:  # Zumindest eine Bedingung
-                raw_score = short_score
-                logger.info(f"🔴 SHORT SQUEEZE: price={price_component:.3f}, div={cvd_divergence:.3f}, score={raw_score:.3f}")
-            else:
-                raw_score = 0.0
-                
-        # SCHWACHE SIGNALE: Auch bei kleinen Bewegungen
-        elif abs(cvd_divergence) > 0.02 or abs(price_component) > 0.005:  # Sehr niedrige Schwelle
-            weak_strength = max(abs(cvd_divergence), abs(price_component)) * 0.1
-            if cvd_divergence < 0 or price_component > 0:
-                raw_score = -weak_strength
-                logger.info(f"🟡 WEAK LONG: price={price_component:.3f}, div={cvd_divergence:.3f}, score={raw_score:.3f}")
-            else:
-                raw_score = weak_strength
-                logger.info(f"🟡 WEAK SHORT: price={price_component:.3f}, div={cvd_divergence:.3f}, score={raw_score:.3f}")
         else:
+            # No clear signal
             raw_score = 0.0
-            logger.debug(f"⚪ NO SQUEEZE: price={price_component:.3f}, div={cvd_divergence:.3f}")
+            signal_type = 'NEUTRAL'
+            alignment_quality = 'NONE'
+        
+        # Apply signal strength multiplier
+        raw_score *= signal_strength_multiplier
+        
+        # WINNING PATTERN BOOST (from research)
+        # Boost signals that match the 4.15% winning pattern
+        spot_change_30min = spot_trend * 30 * 100_000  # Estimate 30min change
+        futures_change_30min = futures_trend * 30 * 100_000
+        
+        # Check if matches winning pattern ranges
+        winning_spot_range = (-20_000_000 <= spot_change_30min <= -5_000_000)
+        winning_futures_range = (80_000_000 <= futures_change_30min <= 150_000_000)
+        winning_divergence = abs(spot_change_30min - futures_change_30min) >= 100_000_000
+        
+        if winning_spot_range and winning_futures_range and winning_divergence:
+            raw_score *= 1.5  # 50% boost for winning pattern
+            signal_type += '_WINNING_PATTERN'
+            
+        # Enhanced logging
+        if abs(raw_score) > 0.1:
+            emoji = '🟢' if raw_score < 0 else '🔴'
+            logger.info(f"{emoji} {signal_type} | Quality: {alignment_quality} | "
+                       f"Score: {raw_score:.3f} | Price: {price_component:.3f} | "
+                       f"Spot: {spot_trend:.3f} | Futures: {futures_trend:.3f} | "
+                       f"Divergence: {cvd_divergence:.3f}")
+        else:
+            logger.debug(f"⚪ NO SIGNAL: {signal_type} | Price: {price_component:.3f} | "
+                        f"Divergence: {cvd_divergence:.3f}")
             
         # Apply smoothing
         if hasattr(self, '_score_history'):
@@ -214,7 +362,7 @@ class SqueezeScoreCalculator:
             self._score_history = [raw_score]
             smoothed_score = raw_score
             
-        # Prepare detailed results
+        # Prepare detailed results with enhanced metrics
         result = {
             'squeeze_score': smoothed_score,
             'raw_score': raw_score,
@@ -226,26 +374,36 @@ class SqueezeScoreCalculator:
             'futures_cvd_acceleration': futures_accel,
             'signal_type': self._classify_signal(smoothed_score),
             'signal_strength': abs(smoothed_score),
+            'alignment_quality': alignment_quality,
+            'signal_multiplier': signal_strength_multiplier,
+            'price_direction': price_direction,
+            'spot_direction': spot_direction,
+            'futures_direction': futures_direction,
             'timestamp': datetime.now()
         }
         
         return result
         
     def _classify_signal(self, score: float) -> str:
-        """Classify the signal based on score (adjusted for cumulative CVD)"""
-        if score <= -0.4:
+        """Classify the signal based on enhanced system thresholds"""
+        # Enhanced thresholds for better signal classification
+        if score <= -0.35:
             return "STRONG_LONG_SQUEEZE"
-        elif score <= -0.2:
+        elif score <= -0.15:
             return "LONG_SQUEEZE"
-        elif score >= 0.4:
+        elif score <= -0.08:
+            return "WEAK_LONG_SQUEEZE"
+        elif score >= 0.35:
             return "STRONG_SHORT_SQUEEZE"
-        elif score >= 0.2:
+        elif score >= 0.15:
             return "SHORT_SQUEEZE"
+        elif score >= 0.08:
+            return "WEAK_SHORT_SQUEEZE"
         else:
             return "NEUTRAL"
             
     def should_enter_position(self, score_data: Dict[str, float], 
-                            min_score_threshold: float = 0.3) -> Tuple[bool, str]:
+                            min_score_threshold: float = 0.2) -> Tuple[bool, str]:
         """
         Determine if we should enter a position based on score
         

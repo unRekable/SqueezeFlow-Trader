@@ -264,6 +264,16 @@ trading_results/
 performance_reports/
 
 # ==============================================
+# AI AGENTS AND DEVELOPMENT TOOLS
+# ==============================================
+
+# AI Agent Sessions and Temporary Files
+agents/
+.agents/
+*.agent
+agent_logs/
+
+# ==============================================
 # TESTING
 # ==============================================
 

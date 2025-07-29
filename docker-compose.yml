@@ -11,8 +11,6 @@ networks:
 volumes:
   influxdb_data:
     driver: local
-  grafana_data:
-    driver: local
   redis_data:
     driver: local
   freqtrade_data:
@@ -33,25 +31,6 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
-    networks:
-      - squeezeflow_network
-
-  # Grafana - Monitoring and Visualization
-  grafana:
-    container_name: squeezeflow-grafana
-    image: grafana/grafana-oss:latest
-    restart: unless-stopped
-    ports:
-      - "3002:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=squeezeflow123
-      - INFLUX_HOST=host.docker.internal
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./config/grafana/provisioning:/etc/grafana/provisioning
-      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
-    # depends_on:
-    #   - influxdb  # External InfluxDB
     networks:
       - squeezeflow_network
 
