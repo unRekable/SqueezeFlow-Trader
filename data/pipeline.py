@@ -44,10 +44,11 @@ class DataPipeline:
                 # DNS resolution failed, stick with localhost
                 influx_host = 'localhost'
         
-        # Create client with extended timeout
+        # Create client with extended timeout and increased connection pool
         from .loaders.influx_client import QueryOptimization
         optimization_config = QueryOptimization(
-            query_timeout_seconds=120,  # Extended timeout for connection issues
+            connection_pool_size=25,  # Increased for better parallelism
+            query_timeout_seconds=300,  # Extended timeout for large backtests
             enable_query_cache=True,
             cache_ttl_seconds=300
         )
@@ -119,7 +120,7 @@ class DataPipeline:
     def load_raw_ohlcv_data(self, symbol: str, start_time: datetime, 
                            end_time: datetime, timeframe: str = '5m') -> pd.DataFrame:
         """
-        Load raw OHLCV data for a symbol
+        Load raw OHLCV data for a symbol with query splitting for large date ranges
         
         Args:
             symbol: Trading symbol
@@ -137,7 +138,14 @@ class DataPipeline:
         if not all_markets:
             return pd.DataFrame()
         
-        # Load data from InfluxDB
+        # Check if we need to split the query based on date range
+        date_diff = (end_time - start_time).days
+        
+        # Split queries for date ranges > 3 days to avoid timeouts
+        if date_diff > 3:
+            return self._load_ohlcv_data_chunked(all_markets, start_time, end_time, timeframe)
+        
+        # Load data from InfluxDB for smaller ranges
         return self.influx_client.get_ohlcv_data(
             markets=all_markets,
             start_time=start_time,
@@ -148,7 +156,7 @@ class DataPipeline:
     def load_raw_volume_data(self, symbol: str, start_time: datetime, 
                             end_time: datetime, timeframe: str = '5m') -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Load raw volume data separated by market type
+        Load raw volume data separated by market type with query splitting for large date ranges
         
         Args:
             symbol: Trading symbol
@@ -164,15 +172,22 @@ class DataPipeline:
         spot_markets = markets.get('spot', [])
         perp_markets = markets.get('perp', [])
         
+        # Check if we need to split the query based on date range
+        date_diff = (end_time - start_time).days
+        
         # Load spot volume data
         spot_df = pd.DataFrame()
         if spot_markets:
-            spot_df = self.influx_client.get_volume_data(
-                markets=spot_markets,
-                start_time=start_time,
-                end_time=end_time,
-                timeframe=timeframe
-            )
+            if date_diff > 3:
+                spot_df = self._load_volume_data_chunked(spot_markets, start_time, end_time, timeframe, 'spot')
+            else:
+                spot_df = self.influx_client.get_volume_data(
+                    markets=spot_markets,
+                    start_time=start_time,
+                    end_time=end_time,
+                    timeframe=timeframe
+                )
+            
             # Rename columns to match CVD calculator expectations
             if not spot_df.empty:
                 column_mapping = {
@@ -188,12 +203,16 @@ class DataPipeline:
         # Load futures volume data
         futures_df = pd.DataFrame()
         if perp_markets:
-            futures_df = self.influx_client.get_volume_data(
-                markets=perp_markets,
-                start_time=start_time,
-                end_time=end_time,
-                timeframe=timeframe
-            )
+            if date_diff > 3:
+                futures_df = self._load_volume_data_chunked(perp_markets, start_time, end_time, timeframe, 'futures')
+            else:
+                futures_df = self.influx_client.get_volume_data(
+                    markets=perp_markets,
+                    start_time=start_time,
+                    end_time=end_time,
+                    timeframe=timeframe
+                )
+            
             # Rename columns to match CVD calculator expectations
             if not futures_df.empty:
                 column_mapping = {
@@ -316,6 +335,119 @@ class DataPipeline:
         ])
         
         return validations
+    
+    def _load_ohlcv_data_chunked(self, markets: List[str], start_time: datetime, 
+                                end_time: datetime, timeframe: str) -> pd.DataFrame:
+        """
+        Load OHLCV data in chunks for large date ranges to avoid timeouts
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime  
+            timeframe: Timeframe
+            
+        Returns:
+            Combined DataFrame from all chunks
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        chunk_days = 3  # Process 3 days at a time
+        all_dfs = []
+        current_start = start_time
+        
+        logger.info(f"Loading OHLCV data in {chunk_days}-day chunks for {len(markets)} markets")
+        
+        while current_start < end_time:
+            chunk_end = min(current_start + timedelta(days=chunk_days), end_time)
+            
+            try:
+                chunk_df = self.influx_client.get_ohlcv_data(
+                    markets=markets,
+                    start_time=current_start,
+                    end_time=chunk_end,
+                    timeframe=timeframe
+                )
+                
+                if not chunk_df.empty:
+                    all_dfs.append(chunk_df)
+                    logger.debug(f"Loaded OHLCV chunk: {current_start.date()} to {chunk_end.date()} ({len(chunk_df)} rows)")
+                
+            except Exception as e:
+                logger.error(f"Failed to load OHLCV chunk {current_start.date()} to {chunk_end.date()}: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all chunks
+        if all_dfs:
+            # Filter out empty DataFrames to avoid FutureWarning
+            non_empty_dfs = [df for df in all_dfs if not df.empty]
+            if non_empty_dfs:
+                combined_df = pd.concat(non_empty_dfs, axis=0).sort_index()
+            else:
+                return pd.DataFrame()
+            logger.info(f"Combined OHLCV data: {len(combined_df)} total rows")
+            return combined_df
+        
+        return pd.DataFrame()
+    
+    def _load_volume_data_chunked(self, markets: List[str], start_time: datetime, 
+                                 end_time: datetime, timeframe: str, market_type: str) -> pd.DataFrame:
+        """
+        Load volume data in chunks for large date ranges to avoid timeouts
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime
+            timeframe: Timeframe
+            market_type: 'spot' or 'futures' for logging
+            
+        Returns:
+            Combined DataFrame from all chunks
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        chunk_days = 3  # Process 3 days at a time
+        all_dfs = []
+        current_start = start_time
+        
+        logger.info(f"Loading {market_type} volume data in {chunk_days}-day chunks for {len(markets)} markets")
+        
+        while current_start < end_time:
+            chunk_end = min(current_start + timedelta(days=chunk_days), end_time)
+            
+            try:
+                chunk_df = self.influx_client.get_volume_data(
+                    markets=markets,
+                    start_time=current_start,
+                    end_time=chunk_end,
+                    timeframe=timeframe
+                )
+                
+                if not chunk_df.empty:
+                    all_dfs.append(chunk_df)
+                    logger.debug(f"Loaded {market_type} volume chunk: {current_start.date()} to {chunk_end.date()} ({len(chunk_df)} rows)")
+                
+            except Exception as e:
+                logger.error(f"Failed to load {market_type} volume chunk {current_start.date()} to {chunk_end.date()}: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all chunks
+        if all_dfs:
+            # Filter out empty DataFrames to avoid FutureWarning
+            non_empty_dfs = [df for df in all_dfs if not df.empty]
+            if non_empty_dfs:
+                combined_df = pd.concat(non_empty_dfs, axis=0).sort_index()
+            else:
+                return pd.DataFrame()
+            logger.info(f"Combined {market_type} volume data: {len(combined_df)} total rows")
+            return combined_df
+        
+        return pd.DataFrame()
     
     def clear_cache(self):
         """Clear discovery caches"""

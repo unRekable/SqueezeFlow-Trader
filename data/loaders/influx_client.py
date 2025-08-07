@@ -44,8 +44,8 @@ class QueryOptimization:
     enable_batch_queries: bool = True
     max_batch_size: int = 10
     enable_query_hints: bool = True
-    connection_pool_size: int = 10
-    query_timeout_seconds: int = 120  # Extended for DNS issues and large queries
+    connection_pool_size: int = 25
+    query_timeout_seconds: int = 300  # Extended for large backtests and DNS issues
 
 
 class OptimizedInfluxClient:
@@ -74,7 +74,8 @@ class OptimizedInfluxClient:
         
         # Optimization configuration with extended timeout for DNS/connection issues
         self.config = optimization_config or QueryOptimization(
-            query_timeout_seconds=120  # Extended timeout for DNS resolution and large queries
+            connection_pool_size=25,  # Increased for better parallelism
+            query_timeout_seconds=300  # Extended timeout for large backtests and DNS resolution
         )
         
         # Connection pool for parallel queries
@@ -336,7 +337,8 @@ class OptimizedInfluxClient:
                     if series:
                         df = pd.DataFrame(series)
                         if not df.empty and 'time' in df.columns:
-                            df['time'] = pd.to_datetime(df['time'])
+                            # InfluxDB stores data in UTC - ensure timezone-aware timestamps
+                            df['time'] = pd.to_datetime(df['time'], utc=True)
                             df.set_index('time', inplace=True)
                         dfs.append(df)
                 
@@ -345,7 +347,12 @@ class OptimizedInfluxClient:
                     if len(dfs) == 1:
                         return dfs[0]
                     else:
-                        return pd.concat(dfs, axis=0, sort=True)
+                        # Filter out empty DataFrames to avoid FutureWarning
+                        non_empty_dfs = [df for df in dfs if not df.empty]
+                        if non_empty_dfs:
+                            return pd.concat(non_empty_dfs, axis=0, sort=True)
+                        else:
+                            return pd.DataFrame()
             
             return pd.DataFrame()
             
@@ -746,8 +753,8 @@ def create_optimized_influx_client(config: Dict) -> OptimizedInfluxClient:
         max_cache_entries=config.get('max_cache_entries', 1000),
         enable_batch_queries=config.get('enable_batch_queries', True),
         max_batch_size=config.get('max_batch_size', 10),
-        connection_pool_size=config.get('connection_pool_size', 10),
-        query_timeout_seconds=config.get('query_timeout_seconds', 120)  # Extended timeout
+        connection_pool_size=config.get('connection_pool_size', 25),
+        query_timeout_seconds=config.get('query_timeout_seconds', 300)  # Extended timeout for backtests
     )
     
     final_host = config.get('influx_host', default_host)

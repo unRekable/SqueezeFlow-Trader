@@ -139,10 +139,11 @@ graph TB
 **📚 Documentation**: [`docs/squeezeflow_strategy.md`](strategy/SqueezeFlow.md), [`docs/cvd_baseline_tracking.md`](cvd_baseline_tracking.md)
 
 ### 3. Backtest Engine
+- **Rolling Window Processing** - 4-hour windows stepping 5 minutes forward to eliminate lookahead bias
 - **Professional Architecture** - Complete rewrite with modular design
 - **Portfolio Management** - Advanced position sizing and risk controls
 - **Performance Analytics** - Comprehensive reporting with HTML/PNG output
-- **Strategy Testing** - Unified codebase for backtest and live trading
+- **Strategy Testing** - Unified codebase with exact live trading parity
 
 **📚 Documentation**: [`docs/backtest_engine.md`](backtest_engine.md)
 
@@ -172,9 +173,10 @@ flowchart TD
         D --> E["1m → 5m → 15m → 30m → 1h → 4h"]
     end
     
-    subgraph "Step 2: Strategy Processing (Backtest Mode)"
+    subgraph "Step 2: Strategy Processing (Backtest Mode - Rolling Windows)"
         F[InfluxDB] --> G[Backtest Engine]
-        G --> H[Data Pipeline]
+        G --> G1[Rolling Window Processor<br/>4-hour windows, 5-min steps]
+        G1 --> H[Data Pipeline]
         H --> I[CVD Calculation]
         I --> J[Strategy<br/>5 phases]
         J --> K[10-Point Scoring]

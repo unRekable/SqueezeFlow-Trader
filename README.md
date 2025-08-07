@@ -67,12 +67,14 @@ Exchange APIs → aggr-server → InfluxDB → Multi-Timeframe CQs → Symbol/Ma
 ### Core Components
 
 #### 🔧 **Backtest Engine** (`/backtest/`)
-Streamlined backtesting system for strategy validation:
+Advanced rolling window backtesting system for realistic strategy validation:
 
-- `engine.py` - Main backtest orchestrator with data loading and execution
+- `engine.py` - Main backtest orchestrator with rolling window processing
 - `core/portfolio.py` - Portfolio management and position tracking
 - `reporting/` - HTML reports, charts, and performance metrics
 - `results/` - Backtest outputs and historical runs
+
+**Rolling Window Processing**: The backtest engine processes data in 4-hour rolling windows, stepping forward 5 minutes at a time to match live trading behavior and eliminate lookahead bias. This ensures reset detection and all strategy phases work correctly with realistic data flow.
 
 #### 📊 **Trading Strategy** (`/strategies/squeezeflow/`)
 5-phase trading methodology implementation:
@@ -165,13 +167,22 @@ docker exec squeezeflow-strategy-runner env | grep -E "SQUEEZEFLOW|REDIS|INFLUX|
 
 ### Running Backtests
 ```bash
-# Run backtest with default settings
+# Run backtest with default settings (rolling window processing)
 python run_backtest.py
 
 # Backtest with specific timeframe
 python run_backtest.py last_week
 python run_backtest.py last_month
+
+# Direct backtest engine usage
+python backtest/engine.py --symbol BTCUSDT --start-date 2024-08-01 --end-date 2024-08-04
 ```
+
+**Rolling Window Backtests**: All backtests now use rolling window processing by default, which:
+- Processes data in 4-hour windows moving forward 5 minutes at a time
+- Eliminates lookahead bias by only showing data up to the current time
+- Matches live trading behavior exactly for realistic results
+- Fixes reset detection issues that occurred with full dataset processing
 
 ### System Testing
 ```bash

@@ -55,7 +55,7 @@ def process_influx_data(data, value_column):
     values = series['values']
     
     df = pd.DataFrame(values, columns=columns) 
-    df['time'] = pd.to_datetime(df['time'])
+    df['time'] = pd.to_datetime(df['time'], utc=True)
     
     return df
 

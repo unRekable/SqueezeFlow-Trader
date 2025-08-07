@@ -17,6 +17,7 @@ Compatible with existing InfluxDB 1.8.10 and 'significant_trades' database struc
 import logging
 import json
 import uuid
+import pytz
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union
 from influxdb import InfluxDBClient
@@ -224,8 +225,8 @@ class InfluxSignalManager:
                 self.logger.warning(f"Signal {signal_id} not found for outcome update")
                 return False
             
-            entry_time = pd.to_datetime(entry_signal.get('time'))
-            exit_time = datetime.now()
+            entry_time = pd.to_datetime(entry_signal.get('time'), utc=True)
+            exit_time = datetime.now(tz=pytz.UTC)
             holding_time_minutes = int((exit_time - entry_time).total_seconds() / 60)
             
             # Create update point
@@ -479,7 +480,7 @@ class InfluxSignalManager:
             # Convert timestamps for better readability
             for signal in signals:
                 if 'time' in signal:
-                    signal['time'] = pd.to_datetime(signal['time']).strftime('%Y-%m-%d %H:%M:%S')
+                    signal['time'] = pd.to_datetime(signal['time'], utc=True).strftime('%Y-%m-%d %H:%M:%S')
             
             return signals
             

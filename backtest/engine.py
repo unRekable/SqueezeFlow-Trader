@@ -11,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import pytz
 from typing import Dict, List, Optional, Any
 import time
 
@@ -68,7 +69,7 @@ class BacktestEngine:
     def run(self, strategy, symbol: str, start_date: str, end_date: str, 
             timeframe: str = '5m', balance: Optional[float] = None, leverage: Optional[float] = None) -> Dict:
         """
-        Run backtest with given strategy
+        Run backtest with rolling window processing to eliminate lookahead bias
         
         Args:
             strategy: Strategy instance with process() method
@@ -97,15 +98,17 @@ class BacktestEngine:
         # Pass CVD baseline manager to strategy if it supports it
         if hasattr(strategy, 'set_cvd_baseline_manager') and self.cvd_baseline_manager:
             strategy.set_cvd_baseline_manager(self.cvd_baseline_manager)
-        start_time = datetime.strptime(start_date, '%Y-%m-%d')
-        end_time = datetime.strptime(end_date, '%Y-%m-%d')
+        # Parse dates and make them timezone-aware (UTC) to match InfluxDB data
+        start_time = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
+        end_time = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
         
-        self.logger.info(f"🚀 Starting backtest: {symbol} from {start_date} to {end_date}")
+        self.logger.info(f"🚀 Starting rolling window backtest: {symbol} from {start_date} to {end_date}")
         self.logger.info(f"💰 Initial balance: ${self.initial_balance:,.2f}")
+        self.logger.info("🔄 Using 4-hour rolling windows with 5-minute steps")
         
-        # STEP 1: LOAD RAW DATA ONLY (no calculations)
-        self.logger.info("📊 Loading raw market data...")
-        dataset = self.data_pipeline.get_complete_dataset(
+        # STEP 1: LOAD COMPLETE RAW DATA FIRST
+        self.logger.info("📊 Loading complete raw market data...")
+        full_dataset = self.data_pipeline.get_complete_dataset(
             symbol=symbol,
             start_time=start_time,
             end_time=end_time,
@@ -113,55 +116,33 @@ class BacktestEngine:
         )
         
         # Validate data quality
-        quality = self.data_pipeline.validate_data_quality(dataset)
+        quality = self.data_pipeline.validate_data_quality(full_dataset)
         if not quality['overall_quality']:
             self.logger.error(f"❌ Data quality check failed: {quality}")
             return self._create_failed_result("Data quality insufficient")
         
-        self.logger.info(f"✅ Data loaded: {dataset['metadata']['data_points']} data points")
-        self.logger.info(f"📈 Markets: {dataset['metadata']['spot_markets_count']} SPOT, {dataset['metadata']['futures_markets_count']} FUTURES")
+        self.logger.info(f"✅ Data loaded: {full_dataset['metadata']['data_points']} data points")
+        self.logger.info(f"📈 Markets: {full_dataset['metadata']['spot_markets_count']} SPOT, {full_dataset['metadata']['futures_markets_count']} FUTURES")
         
-        # STEP 2: STRATEGY PROCESSING (strategy calculates everything)
-        self.logger.info("🧠 Running strategy analysis...")
+        # STEP 2: ROLLING WINDOW STRATEGY PROCESSING
+        self.logger.info("🧠 Running rolling window strategy analysis...")
         
         try:
-            # Strategy processes ALL data and returns trading decisions
-            portfolio_state = self.portfolio.get_state()
-            portfolio_state['available_leverage'] = self.leverage  # Pass leverage to strategy
-            strategy_result = self.strategy.process(dataset, portfolio_state)
-            
-            if not strategy_result or 'orders' not in strategy_result:
-                self.logger.warning("⚠️ Strategy returned no orders")
-                return self._create_result(dataset, [])
-            
-            orders = strategy_result['orders']
-            self.logger.info(f"📋 Strategy generated {len(orders)} orders")
+            executed_orders = self._run_rolling_window_backtest(
+                full_dataset, start_time, end_time, timeframe
+            )
             
         except Exception as e:
-            self.logger.error(f"❌ Strategy processing failed: {e}")
+            self.logger.error(f"❌ Rolling window processing failed: {e}")
             return self._create_failed_result(f"Strategy error: {e}")
         
-        # STEP 3: EXECUTE ORDERS (pure orchestration)
-        self.logger.info("⚡ Executing trading orders...")
-        executed_orders = []
+        # STEP 3: GENERATE RESULTS
+        result = self._create_result(full_dataset, executed_orders)
         
-        for order in orders:
-            try:
-                execution_result = self._execute_order(order, dataset)
-                if execution_result:
-                    executed_orders.append(execution_result)
-                    self.logger.info(f"✅ Order executed: {execution_result['side']} {execution_result['quantity']} @ ${execution_result['price']:.2f}")
-                
-            except Exception as e:
-                self.logger.error(f"❌ Order execution failed: {order} - {e}")
-        
-        # STEP 4: GENERATE RESULTS
-        result = self._create_result(dataset, executed_orders)
-        
-        # STEP 5: CREATE VISUALIZATIONS
+        # STEP 4: CREATE VISUALIZATIONS
         self.logger.info("📊 Generating visualizations...")
         visualization_path = self.visualizer.create_backtest_report(
-            result, dataset, executed_orders
+            result, full_dataset, executed_orders
         )
         result['visualization_path'] = visualization_path
         
@@ -169,6 +150,211 @@ class BacktestEngine:
         self.logger.info(f"📈 Total return: {result['total_return']:.2f}%")
         
         return result
+    
+    def _run_rolling_window_backtest(self, full_dataset: Dict, start_time: datetime, 
+                                   end_time: datetime, timeframe: str) -> List[Dict]:
+        """
+        Process backtest using rolling 4-hour windows stepping forward 5 minutes at a time
+        This eliminates lookahead bias by only providing data up to "current time"
+        
+        Args:
+            full_dataset: Complete dataset loaded from data pipeline
+            start_time: Backtest start time
+            end_time: Backtest end time  
+            timeframe: Trading timeframe (e.g., '5m')
+            
+        Returns:
+            List of executed orders from all windows
+        """
+        # Rolling window parameters (matching live trading)
+        window_hours = 4  # 4-hour rolling windows
+        step_minutes = 5  # Step forward 5 minutes each iteration
+        
+        window_duration = timedelta(hours=window_hours)
+        step_duration = timedelta(minutes=step_minutes)
+        
+        all_executed_orders = []
+        
+        # Get data timeframes for indexing
+        ohlcv = full_dataset.get('ohlcv', pd.DataFrame())
+        if ohlcv.empty:
+            self.logger.error("No OHLCV data available for rolling window processing")
+            return all_executed_orders
+        
+        # Ensure datetime index for proper slicing
+        if not isinstance(ohlcv.index, pd.DatetimeIndex):
+            self.logger.error("OHLCV data must have datetime index for rolling windows")
+            return all_executed_orders
+        
+        # Calculate total iterations for progress tracking
+        total_duration = end_time - start_time
+        total_iterations = int(total_duration.total_seconds() / step_duration.total_seconds())
+        
+        self.logger.info(f"🔄 Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+        
+        # Start with first window (4 hours from start_time)
+        # Ensure current_time is timezone-aware (UTC) to match data timestamps
+        current_time = start_time + window_duration
+        iteration = 0
+        
+        while current_time <= end_time:
+            iteration += 1
+            
+            # Define window boundaries
+            window_start = current_time - window_duration
+            window_end = current_time
+            
+            # Progress logging every 100 iterations or at milestones
+            if iteration % 100 == 0 or iteration == total_iterations:
+                progress_pct = (iteration / total_iterations) * 100
+                self.logger.info(f"🔄 Progress: {iteration:,}/{total_iterations:,} ({progress_pct:.1f}%) - Window: {window_end.strftime('%Y-%m-%d %H:%M')}")
+            
+            try:
+                # Create windowed dataset (only data up to current_time)
+                windowed_dataset = self._create_windowed_dataset(
+                    full_dataset, window_start, window_end
+                )
+                
+                # Skip if insufficient data in window
+                if not self._validate_windowed_data(windowed_dataset):
+                    current_time += step_duration
+                    continue
+                
+                # Get current portfolio state
+                portfolio_state = self.portfolio.get_state()
+                portfolio_state['available_leverage'] = self.leverage
+                portfolio_state['current_time'] = current_time  # Provide current time to strategy
+                
+                # Process strategy with windowed data (no future visibility)
+                strategy_result = self.strategy.process(windowed_dataset, portfolio_state)
+                
+                if strategy_result and 'orders' in strategy_result:
+                    orders = strategy_result['orders']
+                    
+                    # Execute any orders generated for this window
+                    for order in orders:
+                        # Ensure order timestamp doesn't exceed current_time and is timezone-aware
+                        if 'timestamp' not in order or order['timestamp'] > current_time:
+                            order['timestamp'] = current_time
+                        elif 'timestamp' in order and order['timestamp'].tzinfo is None and current_time.tzinfo is not None:
+                            # Make order timestamp timezone-aware if current_time is timezone-aware
+                            order['timestamp'] = order['timestamp'].replace(tzinfo=current_time.tzinfo)
+                        
+                        execution_result = self._execute_order(order, windowed_dataset)
+                        if execution_result:
+                            all_executed_orders.append(execution_result)
+                            
+                            # Log significant trades
+                            side = execution_result.get('side', 'UNKNOWN')
+                            qty = execution_result.get('quantity', 0)
+                            price = execution_result.get('price', 0)
+                            signal_type = execution_result.get('signal_type', 'UNKNOWN')
+                            
+                            self.logger.info(f"✅ {window_end.strftime('%Y-%m-%d %H:%M')} - {side} {qty:.6f} @ ${price:.2f} ({signal_type})")
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error processing window {window_end}: {e}")
+            
+            # Move to next window
+            current_time += step_duration
+        
+        self.logger.info(f"🎯 Rolling window processing completed: {len(all_executed_orders)} total orders executed")
+        return all_executed_orders
+    
+    def _create_windowed_dataset(self, full_dataset: Dict, window_start: datetime, 
+                               window_end: datetime) -> Dict:
+        """
+        Create a dataset containing only data from window_start to window_end
+        This prevents lookahead bias by limiting data visibility
+        
+        Args:
+            full_dataset: Complete dataset from data pipeline
+            window_start: Start of current window (timezone-aware UTC)
+            window_end: End of current window (current_time, timezone-aware UTC)
+            
+        Returns:
+            Dict with windowed data matching full_dataset structure
+        """
+        windowed_dataset = {
+            'symbol': full_dataset.get('symbol'),
+            'timeframe': full_dataset.get('timeframe'),
+            'start_time': window_start,
+            'end_time': window_end,
+            'markets': full_dataset.get('markets', {}),
+            'metadata': full_dataset.get('metadata', {})
+        }
+        
+        # Slice time-series data to window boundaries
+        for data_key in ['ohlcv', 'spot_volume', 'futures_volume', 'spot_cvd', 'futures_cvd', 'cvd_divergence']:
+            full_data = full_dataset.get(data_key, pd.DataFrame() if data_key in ['ohlcv', 'spot_volume', 'futures_volume'] else pd.Series())
+            
+            if isinstance(full_data, (pd.DataFrame, pd.Series)) and not full_data.empty:
+                if isinstance(full_data.index, pd.DatetimeIndex):
+                    # Ensure window boundaries are timezone-aware to match data timestamps
+                    window_start_tz = window_start
+                    window_end_tz = window_end
+                    
+                    # If data is timezone-aware but window boundaries aren't, make them UTC
+                    if full_data.index.tz is not None:
+                        if window_start.tzinfo is None:
+                            window_start_tz = window_start.replace(tzinfo=pytz.UTC)
+                        if window_end.tzinfo is None:
+                            window_end_tz = window_end.replace(tzinfo=pytz.UTC)
+                    # If data is timezone-naive but window boundaries are timezone-aware, convert data
+                    elif full_data.index.tz is None and window_start.tzinfo is not None:
+                        # Convert data index to UTC timezone-aware
+                        full_data.index = full_data.index.tz_localize('UTC')
+                    
+                    # Slice data to window - only data up to window_end (current_time)
+                    try:
+                        windowed_data = full_data.loc[window_start_tz:window_end_tz]
+                        windowed_dataset[data_key] = windowed_data
+                    except Exception as e:
+                        # Fallback for timezone comparison issues
+                        self.logger.warning(f"Timezone comparison failed for {data_key}, using fallback filtering: {e}")
+                        # Manual filtering as fallback
+                        mask = (full_data.index >= window_start_tz) & (full_data.index <= window_end_tz)
+                        windowed_dataset[data_key] = full_data[mask]
+                else:
+                    # Fallback: use full data if no datetime index
+                    windowed_dataset[data_key] = full_data
+            else:
+                # Empty data
+                windowed_dataset[data_key] = full_data
+        
+        # Update metadata for windowed dataset
+        if isinstance(windowed_dataset.get('ohlcv'), pd.DataFrame):
+            windowed_dataset['metadata']['window_data_points'] = len(windowed_dataset['ohlcv'])
+        
+        return windowed_dataset
+    
+    def _validate_windowed_data(self, windowed_dataset: Dict) -> bool:
+        """
+        Validate that windowed dataset has sufficient data for strategy processing
+        
+        Args:
+            windowed_dataset: Windowed dataset to validate
+            
+        Returns:
+            bool: True if data is sufficient, False otherwise
+        """
+        ohlcv = windowed_dataset.get('ohlcv', pd.DataFrame())
+        spot_cvd = windowed_dataset.get('spot_cvd', pd.Series())
+        futures_cvd = windowed_dataset.get('futures_cvd', pd.Series())
+        
+        # Require minimum data points for analysis (at least 30 points for 4h window at 5m intervals)
+        min_points = 30
+        
+        if ohlcv.empty or len(ohlcv) < min_points:
+            return False
+        
+        if spot_cvd.empty or len(spot_cvd) < min_points:
+            return False
+            
+        if futures_cvd.empty or len(futures_cvd) < min_points:
+            return False
+        
+        return True
     
     def _execute_order(self, order: Dict, dataset: Dict) -> Optional[Dict]:
         """
@@ -190,7 +376,7 @@ class BacktestEngine:
         side = order['side'].upper()
         quantity = float(order['quantity'])
         price = float(order['price'])
-        timestamp = order.get('timestamp', datetime.now())
+        timestamp = order.get('timestamp', datetime.now(tz=pytz.UTC))
         
         # Check if this is an exit order first
         signal_type = order.get('signal_type', 'ENTRY')
@@ -400,7 +586,7 @@ if __name__ == "__main__":
                     'side': 'BUY',
                     'quantity': 0.001,  # Small test quantity
                     'price': current_price,
-                    'timestamp': datetime.now(),
+                    'timestamp': datetime.now(tz=pytz.UTC),
                     'signal_type': 'ENTRY',
                     'signal_id': f"debug_entry_{int(datetime.now().timestamp())}"
                 })
@@ -419,7 +605,7 @@ if __name__ == "__main__":
                         'side': 'SELL',  # Exit long position
                         'quantity': 0.001,
                         'price': current_price,
-                        'timestamp': datetime.now(),
+                        'timestamp': datetime.now(tz=pytz.UTC),
                         'signal_type': 'EXIT',
                         'reason': f'Price moved {price_change:.2%} from entry'
                     })
