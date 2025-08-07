@@ -68,6 +68,10 @@ class ExitManagement:
             cvd_divergence = dataset.get('cvd_divergence', pd.Series())
             ohlcv = dataset.get('ohlcv', pd.DataFrame())
             
+            # Ensure entry_analysis is a dictionary
+            if not isinstance(entry_analysis, dict):
+                entry_analysis = {}
+            
             if spot_cvd.empty or ohlcv.empty or not position:
                 return self._no_exit_signal()
                 
@@ -119,9 +123,23 @@ class ExitManagement:
             }
             
         except Exception as e:
+            # Enhanced error logging to debug the string/get issue
+            import traceback
+            error_details = {
+                'error_message': str(e),
+                'error_type': type(e).__name__,
+                'traceback': traceback.format_exc(),
+                'entry_analysis_type': type(entry_analysis).__name__,
+                'entry_analysis_value': str(entry_analysis)[:200] if entry_analysis else 'None',
+                'position_type': type(position).__name__ if position else 'None'
+            }
+            
+            print(f"EXIT MANAGEMENT ERROR: {error_details}")
+            
             return {
                 'phase': 'EXIT_MANAGEMENT',
                 'error': f'Exit management error: {str(e)}',
+                'error_details': error_details,
                 'should_exit': False
             }
     

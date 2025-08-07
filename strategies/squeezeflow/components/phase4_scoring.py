@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import pytz
 
 
 class ScoringSystem:
@@ -81,27 +82,38 @@ class ScoringSystem:
                 'directional_bias': 0
             }
             
-            # Only score if reset is detected
-            if reset.get('reset_detected', False):
-                # 1. CVD Reset Deceleration (3.5 points)
-                scores['cvd_reset_deceleration'] = self._score_cvd_deceleration(
-                    spot_cvd, futures_cvd, reset
-                )
-                
-                # 2. Absorption Candle Confirmation (2.5 points)
-                scores['absorption_candle'] = self._score_absorption_candles(
-                    ohlcv, context, divergence
-                )
-                
-                # 3. Failed Breakdown Pattern (2.0 points)
-                scores['failed_breakdown'] = self._score_failed_breakdown(
-                    ohlcv, spot_cvd, futures_cvd
-                )
-                
-                # 4. Directional Bias Confirmation (2.0 points)
-                scores['directional_bias'] = self._score_directional_bias(
-                    ohlcv, spot_cvd, futures_cvd, context
-                )
+            # Score components (modified to be less dependent on strict reset detection)
+            reset_detected = reset.get('reset_detected', False)
+            
+            # 1. CVD Reset Deceleration (3.5 points)
+            # Allow partial scoring even without strict reset detection
+            scores['cvd_reset_deceleration'] = self._score_cvd_deceleration(
+                spot_cvd, futures_cvd, reset
+            )
+            
+            # 2. Absorption Candle Confirmation (2.5 points)
+            # This can be scored independently of reset detection
+            scores['absorption_candle'] = self._score_absorption_candles(
+                ohlcv, context, divergence
+            )
+            
+            # 3. Failed Breakdown Pattern (2.0 points)
+            # This can be scored independently of reset detection
+            scores['failed_breakdown'] = self._score_failed_breakdown(
+                ohlcv, spot_cvd, futures_cvd
+            )
+            
+            # 4. Directional Bias Confirmation (2.0 points)
+            # This can be scored independently of reset detection
+            scores['directional_bias'] = self._score_directional_bias(
+                ohlcv, spot_cvd, futures_cvd, context
+            )
+            
+            # Apply reset bonus: if reset detected, multiply total score by 1.5
+            if reset_detected:
+                # Award bonus for having proper reset confirmation
+                for key in scores:
+                    scores[key] *= 1.2  # 20% bonus for confirmed reset
             
             # Calculate total score
             total_score = sum(scores.values())
@@ -122,7 +134,7 @@ class ScoringSystem:
                 'should_trade': should_trade,
                 'direction': signal_info['direction'],
                 'reasoning': self._generate_reasoning(scores, reset),
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(tz=pytz.UTC)
             }
             
         except Exception as e:
@@ -147,19 +159,25 @@ class ScoringSystem:
         score = 0.0
         max_score = self.scoring_weights['cvd_reset_deceleration']
         
-        # Check if convergence was detected
+        # Check if convergence was detected (more lenient approach)
         convergence = reset.get('convergence', {})
-        if not convergence.get('converging', False):
-            return score
-        
-        # Score based on convergence strength
         convergence_strength = convergence.get('strength', 0)
+        
+        # Score based on convergence strength (even without strict convergence detection)
         if convergence_strength > 0.5:  # Strong convergence
             score += max_score * 0.5
         elif convergence_strength > 0.3:  # Moderate convergence
             score += max_score * 0.3
-        elif convergence_strength > 0.2:  # Weak convergence
+        elif convergence_strength > 0.1:  # Any convergence signal
             score += max_score * 0.2
+        elif len(spot_cvd) >= 10:
+            # Even without convergence, look for CVD relationship patterns
+            spot_recent_change = abs(spot_cvd.iloc[-5:].pct_change(fill_method=None).mean())
+            futures_recent_change = abs(futures_cvd.iloc[-5:].pct_change(fill_method=None).mean())
+            
+            # If both CVDs are showing similar patterns, award some points
+            if abs(spot_recent_change - futures_recent_change) < max(spot_recent_change, futures_recent_change) * 0.5:
+                score += max_score * 0.1  # Small reward for CVD alignment
             
         # Check for deceleration pattern
         if len(spot_cvd) >= 20:
@@ -323,23 +341,39 @@ class ScoringSystem:
         spot_recent = spot_cvd.iloc[-5:].pct_change(fill_method=None).mean()
         futures_recent = futures_cvd.iloc[-5:].pct_change(fill_method=None).mean()
         
+        # Handle NaN values
+        if pd.isna(spot_recent):
+            spot_recent = 0
+        if pd.isna(futures_recent):
+            futures_recent = 0
+            
         # Check if both CVDs moving in same direction
         cvd_aligned = np.sign(spot_recent) == np.sign(futures_recent)
-        if cvd_aligned and abs(spot_recent) > 0.001:  # Some movement detected
+        if cvd_aligned and abs(spot_recent) > 0.0001:  # Lower threshold for movement detection
             score += max_score * 0.5
+        elif abs(spot_recent) > 0.0001:  # Award partial points for any CVD movement
+            score += max_score * 0.3
             
         # Check if price follows CVD
         price_recent = ohlcv[close_col].iloc[-5:].pct_change(fill_method=None).mean()
-        price_follows_cvd = np.sign(price_recent) == np.sign(spot_recent)
-        
-        if price_follows_cvd and abs(price_recent) > 0.001:
-            score += max_score * 0.3
+        if pd.isna(price_recent):
+            price_recent = 0
             
-        # Consider market context
+        price_follows_cvd = np.sign(price_recent) == np.sign(spot_recent) if spot_recent != 0 else False
+        
+        if price_follows_cvd and abs(price_recent) > 0.0001:
+            score += max_score * 0.3
+        elif abs(price_recent) > 0.0001:  # Award some points for any price movement
+            score += max_score * 0.1
+            
+        # Consider market context (always award some points for context alignment)
         market_bias = context.get('market_bias', 'NEUTRAL')
-        if (market_bias == 'BULLISH' and spot_recent > 0) or \
-           (market_bias == 'BEARISH' and spot_recent < 0):
+        if market_bias == 'BULLISH':
             score += max_score * 0.2
+        elif market_bias == 'BEARISH':
+            score += max_score * 0.2
+        else:  # NEUTRAL
+            score += max_score * 0.1  # Small reward for having context
             
         return min(score, max_score)
     

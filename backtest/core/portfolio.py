@@ -72,12 +72,13 @@ class Portfolio:
             'unrealized_pnl': unrealized_pnl,
             'total_pnl': total_pnl,
             'total_return': (total_value - self.initial_balance) / self.initial_balance * 100,
-            'positions': {k: self._position_to_dict(v) for k, v in self.positions.items()}
+            'positions': [self._position_to_dict(v) for v in self.positions.values()]
         }
     
     def _position_to_dict(self, position: Position) -> Dict:
         """Convert position to dictionary"""
         return {
+            'id': position.trade_id or f"{position.symbol}_{position.side}",  # Use trade_id as id
             'symbol': position.symbol,
             'side': position.side,
             'quantity': position.quantity,

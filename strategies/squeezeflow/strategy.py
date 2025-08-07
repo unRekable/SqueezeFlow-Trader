@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import pytz
 import logging
 
 from strategies.base import BaseStrategy
@@ -107,7 +108,7 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'metadata': {
                     'strategy': self.name,
                     'symbol': symbol,
-                    'timestamp': datetime.now(),
+                    'timestamp': datetime.now(tz=pytz.UTC),
                     'config': self.config.__dict__
                 }
             }
@@ -205,7 +206,16 @@ class SqueezeFlowStrategy(BaseStrategy):
             return results
             
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
             self.logger.error(f"Strategy processing error: {str(e)}")
+            self.logger.error(f"Stack trace: {error_details}")
+            
+            # Debug info for the str/dict issue
+            print(f"DEBUG - Error: {e}")
+            print(f"DEBUG - Error type: {type(e)}")
+            print(f"DEBUG - Stack trace: {error_details}")
+            
             return {
                 'orders': [],
                 'phase_results': {},
@@ -304,7 +314,7 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'side': 'BUY' if direction == 'LONG' else 'SELL',
                 'quantity': base_quantity,
                 'price': current_price,
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(tz=pytz.UTC),
                 'leverage': leverage,
                 'signal_type': scoring_result.get('signal_quality', 'UNKNOWN'),
                 'confidence': scoring_result.get('confidence', 0),
@@ -360,7 +370,7 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'side': exit_side,
                 'quantity': position_quantity,
                 'price': current_price,
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(tz=pytz.UTC),
                 'signal_type': 'EXIT',
                 'confidence': 1.0,  # Exit signals are definitive
                 'reasoning': exit_result.get('exit_reasoning', 'SqueezeFlow exit signal'),
