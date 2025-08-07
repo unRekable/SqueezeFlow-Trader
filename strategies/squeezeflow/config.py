@@ -68,14 +68,12 @@ class SqueezeFlowConfig:
         """Get position size factor based on score (UPDATED for new thresholds)"""
         if score >= 8:
             return self.position_size_by_score["8+"]
-        elif score >= 5:
-            return self.position_size_by_score["5-7"]
-        elif score >= 3:
-            return self.position_size_by_score["3-5"]
-        elif score >= 1.5:
-            return self.position_size_by_score["1.5-3"]
+        elif score >= 6:
+            return self.position_size_by_score["6-7"]
+        elif score >= 4:
+            return self.position_size_by_score["4-5"]
         else:
-            return self.position_size_by_score["0-1.4"]
+            return self.position_size_by_score["0-3.9"]
     
     def get_leverage(self, score: float) -> int:
         """Get leverage based on score (UPDATED for new thresholds)"""
