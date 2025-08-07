@@ -1,0 +1,49 @@
+# Testing Framework Dependencies for SqueezeFlow Trader
+# Install with: pip install -r tests/requirements-test.txt
+
+# Core testing framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Coverage reporting
+pytest-cov>=4.0.0
+coverage>=7.0.0
+
+# Parallel test execution
+pytest-xdist>=3.0.0
+
+# HTML reporting
+pytest-html>=3.1.0
+
+# Property-based testing
+hypothesis>=6.70.0
+
+# Performance monitoring
+psutil>=5.9.0
+memory-profiler>=0.60.0
+
+# Mock and fixtures
+pytest-mock>=3.10.0
+
+# Test data generation
+factory-boy>=3.2.0
+faker>=18.0.0
+
+# Benchmark testing
+pytest-benchmark>=4.0.0
+
+# Test utilities
+pytest-timeout>=2.1.0
+pytest-ordering>=0.6
+pytest-repeat>=0.9.1
+
+# Data handling (already in main requirements but needed for tests)
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Optional: For integration tests with real databases
+# redis>=4.5.0
+# influxdb>=5.3.0
+
+# Optional: For testing with real market data
+# ccxt>=4.0.0

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "PYTHONPATH": "$CLAUDE_PROJECT_DIR:$PYTHONPATH",
+    "SQUEEZEFLOW_ENV": "development"
+  },
+  "model": "opus",
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": ["*"],
+    "deny": []
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🎯 SqueezeFlow Trader Session Started' && echo '✅ User instructions have absolute priority' && echo '✅ Fix issues without removing features' && echo '✅ Clean environment maintained'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[$(date '+%H:%M:%S')] Processing request...\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write.*\\.py$|Edit.*\\.py$|MultiEdit.*\\.py$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_FILE\" && if command -v black >/dev/null 2>&1 && [ -f \"$file\" ]; then black --quiet \"$file\" 2>/dev/null || true; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Write.*(test_|debug_|temp_|check_).*\\.py$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"📝 Created temporary helper: $(basename $CLAUDE_TOOL_FILE) (auto-cleanup enabled)\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🧹 Cleaning temporary files...' && cd \"$CLAUDE_PROJECT_DIR\" && find . -maxdepth 1 -type f \\( -name 'test_*.py' -o -name 'debug_*.py' -o -name 'temp_*.py' -o -name 'check_*.py' \\) -mmin +5 -exec rm -f {} \\; 2>/dev/null && echo '✅ Session complete. Environment clean.'"
+          }
+        ]
+      }
+    ]
+  }
+}

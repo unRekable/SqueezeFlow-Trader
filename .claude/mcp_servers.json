@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "squeezeflow-agents": {
+      "command": "python",
+      "args": ["simple_agents_mcp.py"],
+      "cwd": "/Users/u/PycharmProjects/SqueezeFlow Trader",
+      "env": {
+        "PYTHONPATH": "/Users/u/PycharmProjects/SqueezeFlow Trader"
+      }
+    }
+  }
+}

@@ -17,8 +17,9 @@ import numpy as np
 import subprocess
 import json
 
-# Import exchange mapper
-from utils.exchange_mapper import exchange_mapper
+# Import exchange mapper from data processors
+from data.processors.exchange_mapper import ExchangeMapper
+exchange_mapper = ExchangeMapper()
 
 def query_influx(query):
     """Execute InfluxDB query and return results"""

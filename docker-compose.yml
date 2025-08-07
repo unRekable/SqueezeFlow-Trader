@@ -71,7 +71,7 @@ services:
     ports:
       - "8086:8086"
     volumes:
-      - ./aggr-server/data/influxdb:/var/lib/influxdb/
+      - influxdb_data:/var/lib/influxdb
     networks:
       - squeezeflow_network
       - aggr_backend
@@ -119,48 +119,77 @@ services:
     networks:
       - squeezeflow_network
 
-  # SqueezeFlow Calculator Service
-  squeezeflow-calculator:
-    container_name: squeezeflow-calculator
+  # Strategy Runner Service
+  strategy-runner:
+    container_name: squeezeflow-strategy-runner
     build:
       context: .
-      dockerfile: docker/Dockerfile.squeezeflow
+      dockerfile: docker/Dockerfile.strategy-runner
     restart: unless-stopped
     environment:
+      - TZ=Europe/Berlin
+      - SQUEEZEFLOW_RUN_INTERVAL=60
+      - SQUEEZEFLOW_MAX_SYMBOLS=5
+      - SQUEEZEFLOW_LOOKBACK_HOURS=4
+      - SQUEEZEFLOW_TIMEFRAME=5m
+      - SQUEEZEFLOW_MIN_DATA_POINTS=40
+      - SQUEEZEFLOW_LOG_LEVEL=DEBUG
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
       - INFLUX_HOST=aggr-influx
       - INFLUX_PORT=8086
       - INFLUX_DATABASE=significant_trades
-      - INFLUX_USER=squeezeflow
-      - INFLUX_PASSWORD=password123
-      - REDIS_URL=redis://redis:6379
+      - INFLUX_USERNAME=
+      - INFLUX_PASSWORD=
+      - FREQTRADE_API_URL=http://freqtrade:8080
+      - FREQTRADE_API_USERNAME=0xGang
+      - FREQTRADE_API_PASSWORD=0xGang
+      - FREQTRADE_API_TIMEOUT=10
+      - FREQTRADE_ENABLE_INTEGRATION=true
     depends_on:
       - redis
+      - aggr-influx
+    volumes:
+      - ./freqtrade/config/config.json:/app/freqtrade/user_data/config.json:ro
     networks:
       - squeezeflow_network
       - aggr_backend
-    external_links:
-      - aggr-influx
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis(host='redis', port=6379); r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
 
-  # Freqtrade with FreqAI
+  # Freqtrade with FreqAI and built-in UI
   freqtrade:
     container_name: squeezeflow-freqtrade
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.freqtrade
+    image: freqtradeorg/freqtrade:stable_freqai
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      - FREQTRADE_UI_PASSWORD=squeezeflow123
     volumes:
-      - freqtrade_data:/freqtrade/user_data
       - ./freqtrade/user_data:/freqtrade/user_data
-      - ./freqtrade/config:/freqtrade/config
+      - ./freqtrade/config/config.json:/freqtrade/config/config.json:ro
     depends_on:
       - redis
-      - squeezeflow-calculator
+      - strategy-runner
     networks:
       - squeezeflow_network
+    command: >
+      trade
+      --config /freqtrade/config/config.json
+      --strategy SqueezeFlowFreqAI
+      --logfile /freqtrade/user_data/logs/freqtrade.log
     deploy:
       resources:
         limits:
@@ -168,55 +197,83 @@ services:
         reservations:
           memory: 1G
 
-  # Freqtrade UI (Optional)
-  freqtrade-ui:
-    container_name: squeezeflow-freqtrade-ui
-    image: freqtradeorg/frequi:latest
-    restart: unless-stopped
-    ports:
-      - "8081:8080"
-    environment:
-      - VITE_API_URL=http://localhost:8080
-      - VITE_API_USERNAME=squeezeflow
-      - VITE_API_PASSWORD=squeezeflow123
-    depends_on:
-      - freqtrade
-    networks:
-      - squeezeflow_network
-
-  # System Monitor (Optional)
-  system-monitor:
-    container_name: squeezeflow-monitor
+  # Health Monitor - HTTP health check endpoints
+  health-monitor:
+    container_name: squeezeflow-health-monitor
     build:
       context: .
-      dockerfile: docker/Dockerfile.monitor
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/health_monitor.py
     restart: unless-stopped
+    ports:
+      - "8090:8080"  # HTTP health check endpoints (using 8090 to avoid conflict)
     environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - INFLUX_HOST=aggr-influx
       - INFLUX_PORT=8086
       - INFLUX_DATABASE=significant_trades
+      - LOG_LEVEL=INFO
     depends_on:
+      - redis
       - aggr-influx
+      - strategy-runner
+    networks:
+      - squeezeflow_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ./data/monitoring:/app/data/monitoring
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket access for container management
+
+  # Performance Monitor - Metrics collection and alerting
+  performance-monitor:
+    container_name: squeezeflow-performance-monitor
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/performance_monitor.py
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - aggr-influx
+      - health-monitor
     networks:
       - squeezeflow_network
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
+      - ./data/monitoring:/app/data/monitoring
+      - ./data/charts:/app/data/charts
 
-  # Aggr.trade UI (Tucsky/aggr)
-  # aggr-ui:
-  #   container_name: squeezeflow-aggr-ui
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile.aggr-ui
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8082:8082"
-  #   environment:
-  #     - VITE_APP_API_URL=http://localhost:3001/
-  #     - VITE_APP_HISTORICAL_ENABLED=true
-  #   depends_on:
-  #     - aggr-server
-  #   networks:
-  #     - squeezeflow_network
+  # Signal Monitor Dashboard - Real-time signal visualization
+  signal-monitor-dashboard:
+    container_name: squeezeflow-signal-dashboard
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/signal_monitor_dashboard.py
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - strategy-runner
+    networks:
+      - squeezeflow_network
+    volumes:
+      - ./data/logs:/app/data/logs
+    tty: true  # Required for terminal dashboard display
+    stdin_open: true
+

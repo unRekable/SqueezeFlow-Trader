@@ -1,1079 +1,470 @@
 #!/usr/bin/env python3
 """
-SqueezeFlow Backtest Engine - Clean Orchestrator
-Modular architecture using existing infrastructure and specialized components
-
-Architecture:
-- Uses existing utils/ (exchange_mapper, market_discovery, influxdb_handler)
-- Integrates with fees.py for realistic trading costs
-- Uses portfolio.py for position & risk management  
-- Uses plotter.py for comprehensive visualization
-- Clean separation of concerns and best practices
+Clean Backtest Engine - Pure Orchestration
+NO calculations, NO trading logic - just data loading and order execution
 """
 
-import asyncio
-import logging
-import os
 import sys
-import pandas as pd
-import numpy as np
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-from enum import Enum
-from dataclasses import dataclass
-import json
-
-# Add parent directory to path for imports
+import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import existing architecture
-from data.storage.influxdb_handler import InfluxDBHandler
-from utils.exchange_mapper import exchange_mapper
-from utils.market_discovery import market_discovery
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+import time
 
-# Import modular components from new structure
+from data.pipeline import create_data_pipeline
+
+# Handle imports for both package and direct script execution
 try:
-    # Try relative imports first (when used as module)
-    from .core.portfolio import PortfolioManager, Position, PositionType, RiskLimits
-    from .core.fees import FeeCalculator, TradingCosts
-    from .visualization.plotter import BacktestPlotter
-    from .core.strategy import BaseStrategy, TradingSignal, SignalStrength, load_strategy
+    from .core.portfolio import Portfolio
+    from .core.fake_redis import FakeRedis
+    from .reporting.logger import BacktestLogger
+    from .reporting.visualizer import BacktestVisualizer
 except ImportError:
-    # Fall back to absolute imports (when run directly)
-    from core.portfolio import PortfolioManager, Position, PositionType, RiskLimits
-    from core.fees import FeeCalculator, TradingCosts
-    from visualization.plotter import BacktestPlotter
-    from core.strategy import BaseStrategy, TradingSignal, SignalStrength, load_strategy
+    # Direct script execution
+    from core.portfolio import Portfolio
+    from core.fake_redis import FakeRedis
+    from reporting.logger import BacktestLogger
+    from reporting.visualizer import BacktestVisualizer
+
+# Optional import for CVD baseline manager
+try:
+    from strategies.squeezeflow.baseline_manager import CVDBaselineManager
+except ImportError:
+    CVDBaselineManager = None
 
 
-class SqueezeFlowBacktestEngine:
+class BacktestEngine:
     """
-    Clean, modular backtest engine for SqueezeFlow trading strategy
-    Orchestrates data loading, signal generation, trade execution, and analysis
+    Pure orchestration engine - loads data and executes orders
+    Strategy has COMPLETE authority over all calculations and decisions
     """
     
-    def __init__(self, start_date: str, end_date: str, initial_balance: float = 10000,
-                 symbols: List[str] = None, risk_limits: RiskLimits = None,
-                 strategy: BaseStrategy = None, strategy_config: Dict[str, Any] = None,
-                 debug_mode: bool = False, show_full_range: bool = False):
-        """
-        Initialize backtest engine with modular components
-        
-        Args:
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)  
-            initial_balance: Starting portfolio balance
-            symbols: List of symbols to trade (default: ['BTC', 'ETH'])
-            risk_limits: Risk management configuration
-            strategy: Trading strategy instance (auto-loaded if None)
-            strategy_config: Strategy configuration dict
-        """
-        self.start_date = pd.to_datetime(start_date).tz_localize('UTC')
-        self.end_date = pd.to_datetime(end_date).tz_localize('UTC')
+    def __init__(self, initial_balance: float = 10000.0, leverage: float = 1.0):
         self.initial_balance = initial_balance
-        self.symbols = symbols or ['BTC', 'ETH']
-        self.debug_mode = debug_mode
-        self.show_full_range = show_full_range
+        self.leverage = leverage
+        self.portfolio = Portfolio(initial_balance)
+        self.data_pipeline = create_data_pipeline()
+        self.logger = BacktestLogger()
+        self.visualizer = BacktestVisualizer()
         
-        # Setup logging
-        self.setup_logging()
-        
-        # Initialize components
-        self.setup_database()
-        self.setup_portfolio(risk_limits)
-        self.setup_fee_calculator()
-        self.setup_plotter()
-        self.setup_strategy(strategy, strategy_config)
-        
-        # Data storage
-        self.historical_data = {}
-        self.execution_log = []
-        
-    def setup_logging(self):
-        """Setup logging configuration"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger('SqueezeFlowBacktest')
-        
-    def setup_database(self):
-        """Setup database connection using existing infrastructure"""
-        try:
-            self.db_handler = InfluxDBHandler(
-                host=os.getenv('INFLUX_HOST', 'localhost'),
-                port=int(os.getenv('INFLUX_PORT', 8086)),
-                username=os.getenv('INFLUX_USER', ''),
-                password=os.getenv('INFLUX_PASSWORD', ''),
-                database='significant_trades'
+        # CVD baseline tracking for backtests
+        self.fake_redis = FakeRedis()
+        self.cvd_baseline_manager = None
+        if CVDBaselineManager:
+            self.cvd_baseline_manager = CVDBaselineManager(
+                redis_client=self.fake_redis, 
+                key_prefix="backtest"
             )
-            
-            # Test connection
-            if self.db_handler.test_connection():
-                self.logger.info("✅ Database connection established")
-            else:
-                raise ConnectionError("Failed to connect to InfluxDB")
-                
-        except Exception as e:
-            self.logger.error(f"❌ Database setup failed: {e}")
-            raise
-    
-    def setup_portfolio(self, risk_limits: RiskLimits = None):
-        """Setup portfolio manager with risk controls"""
-        self.portfolio = PortfolioManager(
-            initial_balance=self.initial_balance,
-            risk_limits=risk_limits or RiskLimits()
-        )
-        self.logger.info(f"💼 Portfolio initialized: ${self.initial_balance:,.2f}")
         
-    def setup_fee_calculator(self):
-        """Setup fee calculator using exchange mapper"""
-        self.fee_calculator = FeeCalculator()
-        self.logger.info("💰 Fee calculator initialized with real market fees")
+        # State tracking
+        self.current_time = None
+        self.current_data = None
+        self.strategy = None
+        self.next_trade_id = 1  # For generating trade IDs in backtest
         
-    def setup_plotter(self):
-        """Setup plotting system"""
-        self.plotter = BacktestPlotter(save_directory="backtest")
-        self.logger.info("📊 Plotting system initialized")
-        
-    def setup_strategy(self, strategy: BaseStrategy = None, strategy_config: Dict[str, Any] = None):
-        """Setup trading strategy"""
-        if strategy is not None:
-            self.strategy = strategy
-            self.logger.info(f"🧠 Using provided strategy: {strategy.get_strategy_name()}")
-        else:
-            # Load default SqueezeFlow strategy
-            default_config = strategy_config or {
-                'signal_threshold': 0.6,
-                'lookback_periods': [5, 10, 15, 30, 60, 120, 240],
-                'cvd_threshold': 50_000_000,
-                'price_threshold': 0.5,
-            }
-            self.strategy = load_strategy('squeezeflow_strategy', default_config)
-            self.logger.info(f"🧠 Loaded default strategy: {self.strategy.get_strategy_name()}")
-        
-        # Engine configuration (separate from strategy)
-        self.engine_config = {
-            'check_interval': 5,            # Check signals every N minutes
-            'position_size_pct': 0.02,      # 2% position size
-            'max_holding_hours': 24         # Maximum holding period
-        }
-        
-    async def load_historical_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
+    def run(self, strategy, symbol: str, start_date: str, end_date: str, 
+            timeframe: str = '5m', balance: Optional[float] = None, leverage: Optional[float] = None) -> Dict:
         """
-        Load historical data for all symbols using existing infrastructure
+        Run backtest with given strategy
         
+        Args:
+            strategy: Strategy instance with process() method
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            start_date: Start date string (YYYY-MM-DD)
+            end_date: End date string (YYYY-MM-DD)
+            timeframe: Timeframe for analysis
+            balance: Override initial balance
+            
         Returns:
-            Dict with symbol -> {price, spot_cvd, perp_cvd} DataFrames
+            Dict with backtest results
         """
-        self.logger.info(f"📥 Loading historical data for {len(self.symbols)} symbols...")
+        # Setup
+        if balance:
+            self.portfolio = Portfolio(balance)
+            self.initial_balance = balance
         
-        if self.debug_mode:
-            self.logger.info(f"🔍 DEBUG: Requested date range: {self.start_date.date()} to {self.end_date.date()}")
+        if leverage:
+            self.leverage = leverage
             
-            # Check actual data availability first
-            for symbol in self.symbols:
-                await self._debug_data_coverage(symbol)
+        self.strategy = strategy
+        # Pass leverage to strategy if it supports it
+        if hasattr(strategy, 'set_leverage'):
+            strategy.set_leverage(self.leverage)
         
-        for symbol in self.symbols:
+        # Pass CVD baseline manager to strategy if it supports it
+        if hasattr(strategy, 'set_cvd_baseline_manager') and self.cvd_baseline_manager:
+            strategy.set_cvd_baseline_manager(self.cvd_baseline_manager)
+        start_time = datetime.strptime(start_date, '%Y-%m-%d')
+        end_time = datetime.strptime(end_date, '%Y-%m-%d')
+        
+        self.logger.info(f"🚀 Starting backtest: {symbol} from {start_date} to {end_date}")
+        self.logger.info(f"💰 Initial balance: ${self.initial_balance:,.2f}")
+        
+        # STEP 1: LOAD RAW DATA ONLY (no calculations)
+        self.logger.info("📊 Loading raw market data...")
+        dataset = self.data_pipeline.get_complete_dataset(
+            symbol=symbol,
+            start_time=start_time,
+            end_time=end_time,
+            timeframe=timeframe
+        )
+        
+        # Validate data quality
+        quality = self.data_pipeline.validate_data_quality(dataset)
+        if not quality['overall_quality']:
+            self.logger.error(f"❌ Data quality check failed: {quality}")
+            return self._create_failed_result("Data quality insufficient")
+        
+        self.logger.info(f"✅ Data loaded: {dataset['metadata']['data_points']} data points")
+        self.logger.info(f"📈 Markets: {dataset['metadata']['spot_markets_count']} SPOT, {dataset['metadata']['futures_markets_count']} FUTURES")
+        
+        # STEP 2: STRATEGY PROCESSING (strategy calculates everything)
+        self.logger.info("🧠 Running strategy analysis...")
+        
+        try:
+            # Strategy processes ALL data and returns trading decisions
+            portfolio_state = self.portfolio.get_state()
+            portfolio_state['available_leverage'] = self.leverage  # Pass leverage to strategy
+            strategy_result = self.strategy.process(dataset, portfolio_state)
+            
+            if not strategy_result or 'orders' not in strategy_result:
+                self.logger.warning("⚠️ Strategy returned no orders")
+                return self._create_result(dataset, [])
+            
+            orders = strategy_result['orders']
+            self.logger.info(f"📋 Strategy generated {len(orders)} orders")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Strategy processing failed: {e}")
+            return self._create_failed_result(f"Strategy error: {e}")
+        
+        # STEP 3: EXECUTE ORDERS (pure orchestration)
+        self.logger.info("⚡ Executing trading orders...")
+        executed_orders = []
+        
+        for order in orders:
             try:
-                self.logger.info(f"Loading {symbol} data...")
+                execution_result = self._execute_order(order, dataset)
+                if execution_result:
+                    executed_orders.append(execution_result)
+                    self.logger.info(f"✅ Order executed: {execution_result['side']} {execution_result['quantity']} @ ${execution_result['price']:.2f}")
                 
-                # Get markets for symbol using market discovery
-                markets_by_type = market_discovery.get_markets_by_type(symbol)
-                
-                if not markets_by_type['spot'] and not markets_by_type['perp']:
-                    self.logger.warning(f"No markets found for {symbol}")
-                    continue
-                
-                # Load price data
-                price_data = await self._load_price_data(symbol, markets_by_type['spot'])
-                
-                # Load CVD data  
-                spot_cvd = await self._load_cvd_data(symbol, markets_by_type['spot'], 'spot')
-                perp_cvd = await self._load_cvd_data(symbol, markets_by_type['perp'], 'perp')
-                
-                if not price_data.empty and not spot_cvd.empty and not perp_cvd.empty:
-                    self.historical_data[symbol] = {
-                        'price': price_data,
-                        'spot_cvd': spot_cvd,
-                        'perp_cvd': perp_cvd,
-                        'markets': markets_by_type
-                    }
-                    self.logger.info(f"✅ {symbol}: {len(price_data)} price points, "
-                                   f"{len(spot_cvd)} spot CVD, {len(perp_cvd)} perp CVD")
-                else:
-                    self.logger.warning(f"❌ {symbol}: Insufficient data (price: {len(price_data)}, "
-                                       f"spot CVD: {len(spot_cvd)}, perp CVD: {len(perp_cvd)})")
-                    
             except Exception as e:
-                self.logger.error(f"❌ Error loading {symbol} data: {e}")
-                continue
+                self.logger.error(f"❌ Order execution failed: {order} - {e}")
         
-        if not self.historical_data:
-            raise ValueError("No historical data loaded for any symbol")
-            
-        self.logger.info(f"✅ Historical data loaded for {len(self.historical_data)} symbols")
-        return self.historical_data
+        # STEP 4: GENERATE RESULTS
+        result = self._create_result(dataset, executed_orders)
+        
+        # STEP 5: CREATE VISUALIZATIONS
+        self.logger.info("📊 Generating visualizations...")
+        visualization_path = self.visualizer.create_backtest_report(
+            result, dataset, executed_orders
+        )
+        result['visualization_path'] = visualization_path
+        
+        self.logger.info(f"🎯 Backtest completed - Final balance: ${result['final_balance']:,.2f}")
+        self.logger.info(f"📈 Total return: {result['total_return']:.2f}%")
+        
+        return result
     
-    async def _load_price_data(self, symbol: str, spot_markets: List[str]) -> pd.DataFrame:
-        """Load price data using major spot markets with 1-minute resolution"""
-        try:
-            # Use only major exchanges for reliable pricing
-            major_exchanges = ['BINANCE:', 'COINBASE:', 'KRAKEN:', 'BITSTAMP:']
-            major_markets = [m for m in spot_markets if any(ex in m.upper() for ex in major_exchanges)]
-            
-            if not major_markets:
-                major_markets = spot_markets[:5]  # Fallback to first 5 markets
-            
-            # Build market filter for InfluxDB query
-            market_filter = ' OR '.join([f"market = '{market}'" for market in major_markets])
-            
-            # Convert timestamps to nanoseconds for InfluxDB
-            start_time_ns = int(self.start_date.timestamp() * 1_000_000_000)
-            end_time_ns = int(self.end_date.timestamp() * 1_000_000_000)
-            
-            query = f"""
-            SELECT median(close) as price
-            FROM "aggr_1m"."trades_1m"
-            WHERE ({market_filter})
-            AND time >= {start_time_ns} AND time <= {end_time_ns}
-            AND close > 0
-            GROUP BY time(1m)
-            ORDER BY time ASC
-            """
-            
-            result = self.db_handler.client.query(query)
-            points = list(result.get_points())
-            
-            if not points:
-                self.logger.warning(f"No price data found for {symbol}")
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(points)
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-            
-            self.logger.info(f"✅ Loaded {len(df)} price data points for {symbol}")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error loading price data for {symbol}: {e}")
-            return pd.DataFrame()
-    
-    async def _load_cvd_data(self, symbol: str, markets: List[str], market_type: str) -> pd.Series:
-        """Load CVD data for specific market type with 1-minute resolution"""
-        try:
-            if not markets:
-                self.logger.warning(f"No {market_type} markets provided for {symbol}")
-                return pd.Series()
-            
-            # Build market filter
-            market_filter = ' OR '.join([f"market = '{market}'" for market in markets])
-            
-            # Convert timestamps to nanoseconds for InfluxDB
-            start_time_ns = int(self.start_date.timestamp() * 1_000_000_000)
-            end_time_ns = int(self.end_date.timestamp() * 1_000_000_000)
-            
-            query = f"""
-            SELECT sum(vbuy) - sum(vsell) as cvd_delta
-            FROM "aggr_1m"."trades_1m" 
-            WHERE ({market_filter})
-            AND time >= {start_time_ns} AND time <= {end_time_ns}
-            GROUP BY time(1m)
-            ORDER BY time ASC
-            """
-            
-            result = self.db_handler.client.query(query)
-            points = list(result.get_points())
-            
-            if not points:
-                self.logger.warning(f"No {market_type} CVD data found for {symbol}")
-                return pd.Series()
-            
-            df = pd.DataFrame(points)
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-            
-            # Calculate cumulative CVD (industry standard)
-            cvd_cumulative = df['cvd_delta'].fillna(0).cumsum()
-            
-            self.logger.info(f"✅ Loaded {len(cvd_cumulative)} {market_type} CVD data points for {symbol}")
-            return cvd_cumulative
-            
-        except Exception as e:
-            self.logger.error(f"Error loading {market_type} CVD for {symbol}: {e}")
-            return pd.Series()
-    
-    async def _debug_data_coverage(self, symbol: str):
-        """Debug function to check data coverage for a symbol"""
-        try:
-            # Get basic coverage info
-            # Convert timestamps to nanoseconds for InfluxDB
-            start_time_ns = int(self.start_date.timestamp() * 1_000_000_000)
-            end_time_ns = int(self.end_date.timestamp() * 1_000_000_000)
-            
-            query = f"""
-            SELECT count(close) as data_points,
-                   min(time) as first_data,
-                   max(time) as last_data
-            FROM "aggr_1m"."trades_1m"
-            WHERE market =~ /{symbol.lower()}/
-            AND time >= {start_time_ns} AND time <= {end_time_ns}
-            """
-            
-            result = self.db_handler.client.query(query)
-            points = list(result.get_points())
-            
-            if points and points[0]['data_points'] > 0:
-                point = points[0]
-                self.logger.info(f"🔍 DEBUG {symbol}: {point['data_points']} total points from {point['first_data']} to {point['last_data']}")
-                
-                # Daily breakdown
-                daily_query = f"""
-                SELECT count(close) as daily_points
-                FROM "aggr_1m"."trades_1m"
-                WHERE market =~ /{symbol.lower()}/
-                AND time >= {start_time_ns} AND time <= {end_time_ns}
-                GROUP BY time(1d)
-                ORDER BY time ASC
-                """
-                
-                daily_result = self.db_handler.client.query(daily_query)
-                daily_points = list(daily_result.get_points())
-                
-                self.logger.info(f"🔍 DEBUG {symbol} daily breakdown:")
-                for i, point in enumerate(daily_points):
-                    date_str = point['time'][:10] if point['time'] else 'Unknown'
-                    self.logger.info(f"    {date_str}: {point['daily_points']} data points")
-                    
-            else:
-                self.logger.warning(f"🔍 DEBUG {symbol}: NO DATA FOUND in requested range!")
-                
-        except Exception as e:
-            self.logger.error(f"🔍 DEBUG {symbol}: Error checking coverage: {e}")
-    
-    def generate_trading_signals(self, symbol: str, timestamp: datetime,
-                                lookback_data: Dict[str, pd.Series]) -> TradingSignal:
+    def _execute_order(self, order: Dict, dataset: Dict) -> Optional[Dict]:
         """
-        Generate trading signals using the loaded strategy
+        Execute a single order (pure execution, no logic)
         
         Args:
-            symbol: Trading symbol
-            timestamp: Current timestamp
-            lookback_data: Dict with 'price', 'spot_cvd', 'perp_cvd' series
+            order: Order dict from strategy
+            dataset: Market dataset for execution
             
         Returns:
-            TradingSignal object
+            Execution result or None if failed
         """
-        return self.strategy.generate_signal(symbol, timestamp, lookback_data)
-    
-    def execute_trade_logic(self, signal: TradingSignal) -> Optional[Position]:
-        """
-        Execute trading logic based on signal
-        
-        Args:
-            signal: Trading signal to process
-            
-        Returns:
-            Position if trade executed, None otherwise
-        """
-        try:
-            # Skip weak signals
-            strategy_threshold = self.strategy.config.get('signal_threshold', 0.6)
-            
-            # Debug logging
-            if signal.signal_type != 'NONE':
-                self.logger.info(f"🔍 Signal for {signal.symbol}: {signal.signal_type}, "
-                               f"strength: {signal.strength}, confidence: {signal.confidence:.3f}, "
-                               f"threshold: {strategy_threshold}")
-            
-            if signal.strength == SignalStrength.NONE or signal.confidence < strategy_threshold:
-                if signal.signal_type != 'NONE':
-                    self.logger.info(f"❌ Signal rejected: confidence {signal.confidence:.3f} < {strategy_threshold}")
-                return None
-            
-            # Check if we can open a position
-            base_position_size_pct = self.engine_config['position_size_pct']
-            
-            # Adjust position size based on signal strength, but respect risk limits
-            max_allowed_size = self.portfolio.risk_limits.max_position_size
-            
-            if signal.strength == SignalStrength.STRONG:
-                position_size_pct = min(base_position_size_pct * 1.5, max_allowed_size)
-            elif signal.strength == SignalStrength.WEAK:
-                position_size_pct = base_position_size_pct * 0.5
-            else:
-                position_size_pct = base_position_size_pct
-            
-            # Ensure we don't exceed risk limits
-            position_size_pct = min(position_size_pct, max_allowed_size)
-            
-            # Calculate trading costs
-            trade_value = self.portfolio.current_balance * position_size_pct
-            trading_costs = self.fee_calculator.calculate_trading_costs(
-                symbol=signal.symbol,
-                trade_value=trade_value,
-                holding_hours=self.engine_config['max_holding_hours']
-            )
-            
-            # Adjust position size for fees
-            net_position_size_pct = position_size_pct - (trading_costs.cost_percentage / 100)
-            
-            if net_position_size_pct <= 0:
-                self.logger.warning(f"Position size too small after fees for {signal.symbol}")
-                return None
-            
-            # Determine position type
-            position_type = PositionType.LONG if signal.signal_type == 'LONG' else PositionType.SHORT
-            
-            # Attempt to open position
-            position = self.portfolio.open_position(
-                symbol=signal.symbol,
-                position_type=position_type,
-                entry_price=signal.price,
-                position_size_percentage=net_position_size_pct,
-                timestamp=signal.timestamp
-            )
-            
-            if position:
-                # CRITICAL: Notify strategy that position was opened
-                if hasattr(self.strategy, 'confirm_position_opened'):
-                    try:
-                        self.strategy.confirm_position_opened(signal.symbol, position)
-                    except Exception as e:
-                        self.logger.error(f"Error notifying strategy of position open: {e}")
-                
-                # Log trade execution
-                self.execution_log.append({
-                    'timestamp': signal.timestamp,
-                    'action': 'OPEN',
-                    'symbol': signal.symbol,
-                    'side': signal.signal_type,
-                    'price': signal.price,
-                    'size_pct': net_position_size_pct,
-                    'confidence': signal.confidence,
-                    'strength': signal.strength.name,
-                    'trading_costs': trading_costs.total_cost,
-                    'position_id': position.id
-                })
-                
-                self.logger.info(f"🚀 Opened {position.position_type.value} position: "
-                               f"{position.symbol} at ${position.entry_price:.2f} "
-                               f"(size: {net_position_size_pct:.2f}%, confidence: {signal.confidence:.2f})")
-            
-            return position
-            
-        except Exception as e:
-            self.logger.error(f"Error executing trade logic for {signal.symbol}: {e}")
+        required_fields = ['symbol', 'side', 'quantity', 'price']
+        if not all(field in order for field in required_fields):
+            self.logger.error(f"❌ Invalid order format: {order}")
             return None
-    
-    def manage_open_positions(self, current_prices: Dict[str, float], timestamp: datetime):
-        """
-        Manage open positions (stop loss, take profit, time-based exits)
         
-        Args:
-            current_prices: Current prices for all symbols
-            timestamp: Current timestamp
-        """
-        try:
-            # Update position metrics
-            self.portfolio.update_position_metrics(current_prices, timestamp)
-            
-            # Check strategy-specific exit conditions first
-            strategy_exits = []
-            for position_id, position in self.portfolio.open_positions.items():
-                if position.symbol in current_prices:
-                    # Prepare current data for strategy
-                    if position.symbol in self.historical_data:
-                        data = self.historical_data[position.symbol]
-                        current_idx = None
-                        for idx, ts in enumerate(data['price'].index):
-                            if ts <= timestamp:
-                                current_idx = idx
-                        
-                        if current_idx is not None and current_idx >= 240:  # Ensure enough lookback
-                            start_idx = max(0, current_idx - 240)
-                            current_data = {
-                                'price': data['price'].iloc[start_idx:current_idx+1]['price'],
-                                'spot_cvd': data['spot_cvd'].iloc[start_idx:current_idx+1],
-                                'perp_cvd': data['perp_cvd'].iloc[start_idx:current_idx+1]
-                            }
-                            
-                            # Check strategy exit conditions
-                            should_exit, exit_reason, confidence = self.strategy.should_exit_position(
-                                position, current_data, timestamp
-                            )
-                            
-                            if should_exit:
-                                strategy_exits.append((position_id, exit_reason))
-                                print(f"    Strategy exit: {position_id} - {exit_reason}")
-            
-            # Close positions based on strategy exits
-            for position_id, exit_reason in strategy_exits:
-                if position_id in self.portfolio.open_positions:
-                    position = self.portfolio.open_positions[position_id]
-                    exit_price = current_prices.get(position.symbol, position.entry_price)
-                    
-                    trade_value = position.entry_price * position.size
-                    exit_costs = self.fee_calculator.calculate_trading_costs(
-                        symbol=position.symbol,
-                        trade_value=trade_value,
-                        holding_hours=position.duration_hours(timestamp)
-                    )
-                    
-                    closed_position = self.portfolio.close_position(
-                        position_id=position_id,
-                        exit_price=exit_price,
-                        timestamp=timestamp,
-                        exit_reason=exit_reason,
-                        trading_fees=exit_costs.total_cost
-                    )
-                    
-                    if closed_position:
-                        # CRITICAL: Notify strategy that position was closed
-                        if hasattr(self.strategy, 'confirm_position_closed'):
-                            try:
-                                self.strategy.confirm_position_closed(closed_position.symbol, closed_position, exit_reason)
-                            except Exception as e:
-                                self.logger.error(f"Error notifying strategy of position close: {e}")
-                        
-                        self.execution_log.append({
-                            'timestamp': timestamp,
-                            'action': 'CLOSE',
-                            'symbol': closed_position.symbol,
-                            'side': closed_position.position_type.value,
-                            'price': exit_price,
-                            'pnl_pct': closed_position.pnl_percentage,
-                            'pnl_abs': closed_position.pnl_absolute,
-                            'duration_hours': closed_position.duration_hours(),
-                            'exit_reason': closed_position.exit_reason,
-                            'trading_costs': exit_costs.total_cost,
-                            'position_id': closed_position.id
-                        })
-            
-            # Check stop loss and take profit
-            positions_to_close = self.portfolio.check_stop_loss_take_profit(current_prices, timestamp)
-            
-            # Close triggered positions
-            for position_id in positions_to_close:
-                if position_id in self.portfolio.open_positions:
-                    position = self.portfolio.open_positions[position_id]
-                    exit_price = current_prices.get(position.symbol, position.entry_price)
-                    
-                    # Calculate final trading costs
-                    trade_value = position.entry_price * position.size
-                    exit_costs = self.fee_calculator.calculate_trading_costs(
-                        symbol=position.symbol,
-                        trade_value=trade_value,
-                        holding_hours=position.duration_hours(timestamp)
-                    )
-                    
-                    # Close position
-                    closed_position = self.portfolio.close_position(
-                        position_id=position_id,
-                        exit_price=exit_price,
-                        timestamp=timestamp,
-                        exit_reason="Stop/Target triggered",
-                        trading_fees=exit_costs.total_cost
-                    )
-                    
-                    if closed_position:
-                        # Log trade closure
-                        self.execution_log.append({
-                            'timestamp': timestamp,
-                            'action': 'CLOSE',
-                            'symbol': closed_position.symbol,
-                            'side': closed_position.position_type.value,
-                            'price': exit_price,
-                            'pnl_pct': closed_position.pnl_percentage,
-                            'pnl_abs': closed_position.pnl_absolute,
-                            'duration_hours': closed_position.duration_hours(),
-                            'exit_reason': closed_position.exit_reason,
-                            'trading_costs': exit_costs.total_cost,
-                            'position_id': closed_position.id
-                        })
-            
-            # Check for time-based exits
-            for position_id, position in list(self.portfolio.open_positions.items()):
-                duration_hours = position.duration_hours(timestamp)
-                print(f"    Checking time exit for {position_id}: {duration_hours:.2f}h vs {self.engine_config['max_holding_hours']}h limit")
-                if duration_hours > self.engine_config['max_holding_hours']:
-                    exit_price = current_prices.get(position.symbol, position.entry_price)
-                    
-                    trade_value = position.entry_price * position.size
-                    exit_costs = self.fee_calculator.calculate_trading_costs(
-                        symbol=position.symbol,
-                        trade_value=trade_value,
-                        holding_hours=position.duration_hours(timestamp)
-                    )
-                    
-                    closed_position = self.portfolio.close_position(
-                        position_id=position_id,
-                        exit_price=exit_price,
-                        timestamp=timestamp,
-                        exit_reason="Time-based exit",
-                        trading_fees=exit_costs.total_cost
-                    )
-                    
-                    if closed_position:
-                        # CRITICAL: Notify strategy that position was closed
-                        if hasattr(self.strategy, 'confirm_position_closed'):
-                            try:
-                                self.strategy.confirm_position_closed(closed_position.symbol, closed_position, exit_reason)
-                            except Exception as e:
-                                self.logger.error(f"Error notifying strategy of position close: {e}")
-                        
-                        self.execution_log.append({
-                            'timestamp': timestamp,
-                            'action': 'CLOSE',
-                            'symbol': closed_position.symbol,
-                            'side': closed_position.position_type.value,
-                            'price': exit_price,
-                            'pnl_pct': closed_position.pnl_percentage,
-                            'pnl_abs': closed_position.pnl_absolute,
-                            'duration_hours': closed_position.duration_hours(),
-                            'exit_reason': closed_position.exit_reason,
-                            'trading_costs': exit_costs.total_cost,
-                            'position_id': closed_position.id
-                        })
-                        
-                        self.logger.info(f"⏰ Time-based exit: {closed_position.symbol} "
-                                       f"(P&L: {closed_position.pnl_percentage:.2f}%)")
-            
-        except Exception as e:
-            self.logger.error(f"Error managing positions: {e}")
-    
-    async def run_backtest(self) -> Dict[str, Any]:
-        """
-        Run the complete backtest simulation
+        symbol = order['symbol']
+        side = order['side'].upper()
+        quantity = float(order['quantity'])
+        price = float(order['price'])
+        timestamp = order.get('timestamp', datetime.now())
         
-        Returns:
-            Comprehensive backtest results
-        """
-        self.logger.info(f"🚀 Starting SqueezeFlow backtest: {self.start_date.date()} to {self.end_date.date()}")
+        # Check if this is an exit order first
+        signal_type = order.get('signal_type', 'ENTRY')
         
-        try:
-            # Load historical data
-            await self.load_historical_data()
+        if signal_type == 'EXIT':
+            # This is an exit order - close the matching position
+            self.logger.info(f"🚪 Processing EXIT order for {symbol}")
             
-            # Get all timestamps for simulation
-            all_timestamps = set()
-            for data in self.historical_data.values():
-                all_timestamps.update(data['price'].index)
-            all_timestamps = sorted(all_timestamps)
+            # Try different methods to find and close position
+            close_result = None
             
-            # Find valid simulation range
-            strategy_lookbacks = self.strategy.config.get('lookback_periods', [240])
-            max_lookback = max(strategy_lookbacks) if strategy_lookbacks else 240
-            start_idx = max_lookback + 10  # Ensure sufficient lookback data
-            simulation_timestamps = all_timestamps[start_idx::self.engine_config['check_interval']]
-            
-            self.logger.info(f"📊 Simulating {len(simulation_timestamps)} time periods...")
-            
-            # Main simulation loop
-            daily_stats = {}
-            current_day = None
-            
-            for i, timestamp in enumerate(simulation_timestamps):
-                try:
-                    # Track daily progress for debug mode
-                    if self.debug_mode:
-                        day_str = timestamp.strftime('%Y-%m-%d')
-                        if day_str != current_day:
-                            if current_day and current_day in daily_stats:
-                                self.logger.info(f"🔍 DEBUG {current_day}: {daily_stats[current_day]['signals']} signals, {daily_stats[current_day]['trades']} trades, Balance: ${self.portfolio.current_balance:,.2f}")
-                            current_day = day_str
-                            daily_stats[day_str] = {'signals': 0, 'trades': 0, 'balance': self.portfolio.current_balance}
-                    # Get current prices
-                    current_prices = {}
-                    for symbol, data in self.historical_data.items():
-                        if timestamp in data['price'].index:
-                            price = data['price'].loc[timestamp, 'price']
-                            if not pd.isna(price):
-                                current_prices[symbol] = price
-                    
-                    # Manage existing positions first
-                    if current_prices:
-                        self.manage_open_positions(current_prices, timestamp)
-                    
-                    # Generate new signals (only if we have room for new positions)
-                    if len(self.portfolio.open_positions) < self.portfolio.risk_limits.max_open_positions:
-                        for symbol in self.symbols:
-                            if symbol in current_prices and symbol in self.historical_data:
-                                # CRITICAL FIX: Check if symbol already has an open position
-                                has_open_position = any(pos.symbol == symbol for pos in self.portfolio.open_positions.values())
-                                if has_open_position:
-                                    continue  # Skip if already have position in this symbol
-                                
-                                # Prepare lookback data
-                                data = self.historical_data[symbol]
-                                end_idx = data['price'].index.get_loc(timestamp)
-                                start_idx = max(0, end_idx - max_lookback)
-                                
-                                lookback_data = {
-                                    'price': data['price'].iloc[start_idx:end_idx+1]['price'],
-                                    'spot_cvd': data['spot_cvd'].iloc[start_idx:end_idx+1],
-                                    'perp_cvd': data['perp_cvd'].iloc[start_idx:end_idx+1]
-                                }
-                                
-                                # Generate signal
-                                signal = self.generate_trading_signals(symbol, timestamp, lookback_data)
-                                
-                                # Execute trade if signal is strong enough
-                                if signal.signal_type != 'NONE':
-                                    if self.debug_mode and current_day:
-                                        daily_stats[current_day]['signals'] += 1
-                                    
-                                    position = self.execute_trade_logic(signal)
-                                    if position and self.debug_mode and current_day:
-                                        daily_stats[current_day]['trades'] += 1
-                    
-                    # Progress logging
-                    if i % 100 == 0 and i > 0:
-                        progress_pct = (i / len(simulation_timestamps)) * 100
-                        self.logger.info(f"📈 Progress: {progress_pct:.1f}% "
-                                       f"(Balance: ${self.portfolio.current_balance:,.2f}, "
-                                       f"Open: {len(self.portfolio.open_positions)})")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error at timestamp {timestamp}: {e}")
-                    continue
-            
-            # Log final day stats if in debug mode
-            if self.debug_mode and current_day and current_day in daily_stats:
-                self.logger.info(f"🔍 DEBUG {current_day}: {daily_stats[current_day]['signals']} signals, {daily_stats[current_day]['trades']} trades, Balance: ${self.portfolio.current_balance:,.2f}")
+            # Method 1: Close by specific trade_id if provided
+            if 'trade_id' in order:
+                close_result = self.portfolio.close_position_by_trade_id(
+                    trade_id=order['trade_id'],
+                    price=price,
+                    timestamp=timestamp
+                )
                 
-                # Summary of all days
-                self.logger.info(f"🔍 DEBUG SUMMARY:")
-                total_signals = sum(stats['signals'] for stats in daily_stats.values())
-                total_trades = sum(stats['trades'] for stats in daily_stats.values())
-                self.logger.info(f"    Total simulation days: {len(daily_stats)}")
-                self.logger.info(f"    Total signals generated: {total_signals}")
-                self.logger.info(f"    Total trades executed: {total_trades}")
-                self.logger.info(f"    Days with trading activity: {sum(1 for stats in daily_stats.values() if stats['trades'] > 0)}")
-                self.logger.info(f"    Days with signals only: {sum(1 for stats in daily_stats.values() if stats['signals'] > 0 and stats['trades'] == 0)}")
-                self.logger.info(f"    Days with no activity: {sum(1 for stats in daily_stats.values() if stats['signals'] == 0)}")
-            
-            # Close any remaining positions
-            if self.portfolio.open_positions:
-                final_timestamp = simulation_timestamps[-1]
-                final_prices = {}
-                for symbol, data in self.historical_data.items():
-                    if final_timestamp in data['price'].index:
-                        final_prices[symbol] = data['price'].loc[final_timestamp, 'price']
+            # Method 2: Close by signal_id if provided
+            elif 'signal_id' in order:
+                close_result = self.portfolio.close_position_by_signal_id(
+                    signal_id=order['signal_id'],
+                    price=price,
+                    timestamp=timestamp
+                )
                 
-                for position_id in list(self.portfolio.open_positions.keys()):
-                    position = self.portfolio.open_positions[position_id]
-                    exit_price = final_prices.get(position.symbol, position.entry_price)
-                    
-                    trade_value = position.entry_price * position.size
-                    exit_costs = self.fee_calculator.calculate_trading_costs(
-                        symbol=position.symbol,
-                        trade_value=trade_value,
-                        holding_hours=position.duration_hours(timestamp)
-                    )
-                    
-                    closed_position = self.portfolio.close_position(
-                        position_id=position_id,
-                        exit_price=exit_price,
-                        timestamp=final_timestamp,
-                        exit_reason="Backtest end",
-                        trading_fees=exit_costs.total_cost
-                    )
-                    
-                    # CRITICAL: Notify strategy that position was closed at backtest end
-                    if closed_position and hasattr(self.strategy, 'confirm_position_closed'):
-                        try:
-                            self.strategy.confirm_position_closed(closed_position.symbol, closed_position, "Backtest end")
-                        except Exception as e:
-                            self.logger.error(f"Error notifying strategy of final position close: {e}")
-            
-            # Generate results and plots
-            results = self.generate_results()
-            self.create_plots()
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"❌ Backtest failed: {e}")
-            raise
-    
-    def generate_results(self) -> Dict[str, Any]:
-        """Generate comprehensive backtest results"""
-        try:
-            # Get portfolio metrics
-            portfolio_metrics = self.portfolio.get_performance_metrics()
-            
-            # Convert closed positions to trade history
-            trade_history = []
-            for position in self.portfolio.closed_positions:
-                trade_history.append({
-                    'symbol': position.symbol,
-                    'side': position.position_type.value.lower(),
-                    'entry_time': position.entry_time,
-                    'exit_time': position.exit_time,
-                    'entry_price': position.entry_price,
-                    'exit_price': position.exit_price,
-                    'size': position.size,
-                    'pnl_pct': position.pnl_percentage,
-                    'pnl_abs': position.pnl_absolute,
-                    'duration_hours': position.duration_hours(),
-                    'exit_reason': position.exit_reason,
-                    'fees_paid': position.fees_paid
-                })
-            
-            # Calculate additional metrics
-            total_trading_costs = sum(pos.fees_paid for pos in self.portfolio.closed_positions)
-            avg_trade_duration = portfolio_metrics.get('avg_trade_duration', 0)
-            
-            # Safe access to portfolio metrics with defaults and NaN protection
-            current_balance = portfolio_metrics.get('current_balance', self.portfolio.current_balance)
-            total_return = portfolio_metrics.get('total_return', 0.0)
-            # Use actual balance change, not just position PnL
-            total_pnl = current_balance - self.initial_balance
-            
-            # Protect against NaN values in results
-            def safe_float(value, default=0.0):
-                """Convert value to safe float, replacing NaN/inf with default"""
-                if pd.isna(value) or np.isinf(value):
-                    return default
-                return float(value)
-            
-            current_balance = safe_float(current_balance, self.initial_balance)
-            total_return = safe_float(total_return, 0.0)
-            total_pnl = safe_float(total_pnl, 0.0)
-            
-            results = {
-                'strategy_name': self.strategy.get_strategy_name() if self.strategy else 'Unknown',
-                'backtest_type': 'MODULAR_SQUEEZEFLOW_BACKTEST',
-                'backtest_period': f"{self.start_date.date()} to {self.end_date.date()}",
-                'symbols': self.symbols,
-                
-                # Portfolio performance
-                'initial_balance': self.initial_balance,
-                'final_balance': current_balance,
-                'total_return_pct': total_return,
-                'total_return_usd': total_pnl,
-                
-                # Trading metrics
-                'total_trades': portfolio_metrics.get('total_trades', 0),
-                'winning_trades': portfolio_metrics.get('winning_trades', 0),
-                'losing_trades': portfolio_metrics.get('losing_trades', 0),
-                'win_rate_pct': safe_float(portfolio_metrics.get('win_rate', 0.0)),
-                'avg_trade_return_pct': safe_float(total_return / max(portfolio_metrics.get('total_trades', 1), 1)),
-                'best_trade_pct': safe_float(portfolio_metrics.get('largest_win_pct', 0.0)),
-                'worst_trade_pct': safe_float(portfolio_metrics.get('largest_loss_pct', 0.0)),
-                'avg_duration_hours': safe_float(avg_trade_duration),
-                
-                # Risk metrics
-                'max_drawdown_pct': safe_float(portfolio_metrics.get('max_drawdown', 0.0)),
-                'sharpe_ratio': safe_float(portfolio_metrics.get('sharpe_ratio', 0.0)),
-                'profit_factor': safe_float(portfolio_metrics.get('profit_factor', 0.0)),
-                
-                # Cost analysis
-                'total_trading_costs_usd': total_trading_costs,
-                'trading_costs_pct': (total_trading_costs / self.initial_balance) * 100,
-                'avg_cost_per_trade': total_trading_costs / max(portfolio_metrics['total_trades'], 1),
-                
-                # Strategy configuration
-                'strategy_name': self.strategy.get_strategy_name(),
-                'strategy_config': self.strategy.get_config(),
-                'engine_config': self.engine_config,
-                'risk_limits': {
-                    'max_position_size': self.portfolio.risk_limits.max_position_size,
-                    'max_total_exposure': self.portfolio.risk_limits.max_total_exposure,
-                    'max_open_positions': self.portfolio.risk_limits.max_open_positions
-                },
-                
-                # Detailed data
-                'trade_history': trade_history,
-                'execution_log': self.execution_log,
-                'portfolio_metrics': portfolio_metrics
-            }
-            
-            self.logger.info(f"✅ Backtest completed: {results['total_return_pct']:.2f}% return "
-                           f"({results['total_trades']} trades, {results['win_rate_pct']:.1f}% win rate)")
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Error generating results: {e}")
-            return {'error': str(e)}
-    
-    def create_plots(self):
-        """Create comprehensive plots for backtest results"""
-        try:
-            self.logger.info("📊 Generating plots...")
-            
-            # Pass additional parameters to plotter
-            self.plotter.show_full_range = self.show_full_range
-            self.plotter.requested_start_date = self.start_date
-            self.plotter.requested_end_date = self.end_date
-            self.plotter.debug_mode = self.debug_mode
-            
-            # Create comprehensive plot for each symbol
-            for symbol in self.symbols:
-                if symbol in self.historical_data:
-                    symbol_trades = [t for t in self.portfolio.closed_positions 
-                                   if t.symbol == symbol]
-                    
-                    if symbol_trades:
-                        # Convert positions to trade format for plotting
-                        plot_trades = []
-                        for pos in symbol_trades:
-                            plot_trades.append({
-                                'symbol': pos.symbol,
-                                'side': pos.position_type.value.lower(),
-                                'entry_time': pos.entry_time,
-                                'exit_time': pos.exit_time,
-                                'entry_price': pos.entry_price,
-                                'exit_price': pos.exit_price,
-                                'pnl_pct': pos.pnl_percentage,
-                                'duration_minutes': pos.duration_hours() * 60,
-                                'strategy_type': 'MODULAR'
-                            })
-                        
-                        portfolio_metrics = self.portfolio.get_performance_metrics()
-                        
-                        filename = f'modular_backtest_{symbol.lower()}_results.png'
-                        self.plotter.create_comprehensive_plot(
-                            symbol=symbol,
-                            historical_data=self.historical_data[symbol],
-                            trades=plot_trades,
-                            filename=filename,
-                            portfolio_metrics=portfolio_metrics
-                        )
-                    else:
-                        self.logger.info(f"No trades for {symbol}, skipping plot")
-            
-            # Create equity curve
-            if self.portfolio.closed_positions:
-                self.plotter.create_equity_curve_plot(
-                    portfolio_manager=self.portfolio,
-                    filename='modular_equity_curve.png'
+            # Method 3: Close most recent matching position by symbol and side
+            else:
+                # For exit orders, we need to close the opposite position
+                # If exit order is 'BUY', we're closing a SHORT position
+                # If exit order is 'SELL', we're closing a LONG position
+                position_side = 'SHORT' if side == 'BUY' else 'LONG'
+                close_result = self.portfolio.close_matching_position(
+                    symbol=symbol,
+                    side=position_side,
+                    price=price,
+                    timestamp=timestamp
                 )
             
-            # Create performance summary
-            portfolio_metrics = self.portfolio.get_performance_metrics()
-            self.plotter.create_performance_summary_plot(
-                metrics=portfolio_metrics,
-                filename='modular_performance_summary.png'
-            )
+            if close_result:
+                self.logger.info(f"✅ Position closed successfully: {close_result}")
+                return {
+                    'symbol': symbol,
+                    'side': f"EXIT_{side}",
+                    'quantity': quantity,
+                    'price': price,
+                    'timestamp': timestamp,
+                    'signal_type': 'EXIT',
+                    'close_result': close_result,
+                    'fees': order.get('fees', 0),
+                    'slippage': order.get('slippage', 0)
+                }
+            else:
+                self.logger.warning(f"⚠️ No matching position found to close for EXIT order: {symbol}")
+                return None
+        
+        else:
+            # Handle regular entry orders (existing logic)
             
-        except Exception as e:
-            self.logger.error(f"Error creating plots: {e}")
-
-
-async def main():
-    """Run backtest with command line arguments"""
-    import argparse
-    try:
-        from .strategies import get_available_strategies
-    except ImportError:
-        from strategies import get_available_strategies
+            # Apply leverage (strategy can override with 'leverage' field in order)
+            order_leverage = order.get('leverage', self.leverage)
+            effective_quantity = quantity * order_leverage
+            
+            # Generate trade ID and store CVD baseline if available
+            trade_id = self.next_trade_id
+            self.next_trade_id += 1
+            
+            signal_id = order.get('signal_id', f"backtest_{trade_id}")
+            
+            # Store CVD baseline if manager available and order has CVD data
+            if self.cvd_baseline_manager and 'spot_cvd' in order and 'futures_cvd' in order:
+                self.cvd_baseline_manager.store_baseline(
+                    signal_id=signal_id,
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    side=side.lower(),
+                    entry_price=price,
+                    spot_cvd=order['spot_cvd'],
+                    futures_cvd=order['futures_cvd']
+                )
+            
+            # Execute through portfolio with leverage and tracking info
+            success = False
+            if side == 'BUY':
+                success = self.portfolio.open_long_position(
+                    symbol=symbol,
+                    quantity=effective_quantity,
+                    price=price,
+                    timestamp=timestamp,
+                    trade_id=trade_id,
+                    signal_id=signal_id
+                )
+            elif side == 'SELL':
+                success = self.portfolio.open_short_position(
+                    symbol=symbol,
+                    quantity=effective_quantity,
+                    price=price,
+                    timestamp=timestamp,
+                    trade_id=trade_id,
+                    signal_id=signal_id
+                )
+            else:
+                self.logger.error(f"❌ Unknown order side: {side}")
+                return None
+            
+            if success:
+                return {
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': effective_quantity,
+                    'original_quantity': quantity,
+                    'leverage': order_leverage,
+                    'price': price,
+                    'trade_id': trade_id,
+                    'signal_id': signal_id,
+                    'timestamp': timestamp,
+                    'signal_type': signal_type,
+                    'fees': order.get('fees', 0),
+                    'slippage': order.get('slippage', 0)
+                }
+        
+        return None
     
-    parser = argparse.ArgumentParser(description='SqueezeFlow Modular Backtest Engine')
-    parser.add_argument('--start-date', required=True, help='Start date (YYYY-MM-DD)')
-    parser.add_argument('--end-date', required=True, help='End date (YYYY-MM-DD)')
-    parser.add_argument('--balance', type=float, default=10000, help='Initial balance (default: 10000)')
-    parser.add_argument('--symbols', nargs='+', default=['BTC', 'ETH'], help='Symbols to trade')
-    parser.add_argument('--strategy', default='squeezeflow', choices=get_available_strategies(),
-                       help='Trading strategy to use (default: squeezeflow)')
-    parser.add_argument('--strategy-config', help='Strategy config JSON string')
-    parser.add_argument('--output', help='Output file for results (JSON)')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode with detailed logging')
-    parser.add_argument('--show-full-range', action='store_true', help='Show full requested date range in plots, not just trading periods')
+    def _create_result(self, dataset: Dict, executed_orders: List[Dict]) -> Dict:
+        """Create backtest result summary"""
+        portfolio_state = self.portfolio.get_state()
+        
+        return {
+            'symbol': dataset['symbol'],
+            'timeframe': dataset['timeframe'],
+            'start_time': dataset['start_time'],
+            'end_time': dataset['end_time'],
+            'initial_balance': self.initial_balance,
+            'final_balance': portfolio_state['total_value'],
+            'total_return': ((portfolio_state['total_value'] - self.initial_balance) / self.initial_balance) * 100,
+            'total_trades': len(executed_orders),
+            'winning_trades': len([o for o in executed_orders if o.get('pnl', 0) > 0]),
+            'losing_trades': len([o for o in executed_orders if o.get('pnl', 0) < 0]),
+            'win_rate': (len([o for o in executed_orders if o.get('pnl', 0) > 0]) / max(len(executed_orders), 1)) * 100,
+            'executed_orders': executed_orders,
+            'portfolio_state': portfolio_state,
+            'data_quality': self.data_pipeline.validate_data_quality(dataset),
+            'metadata': dataset['metadata']
+        }
     
-    args = parser.parse_args()
-    
-    # Parse strategy configuration if provided
-    strategy_config = {}
-    if args.strategy_config:
-        try:
-            strategy_config = json.loads(args.strategy_config)
-        except json.JSONDecodeError as e:
-            print(f"Error parsing strategy config JSON: {e}")
-            return
-    
-    # Load strategy
-    try:
-        strategy = load_strategy(args.strategy, strategy_config)
-        print(f"🧠 Loaded strategy: {strategy.get_strategy_name()}")
-        if strategy_config:
-            print(f"📋 Strategy config: {strategy_config}")
-    except ValueError as e:
-        print(f"❌ Strategy loading error: {e}")
-        return
-    
-    # Create risk limits
-    risk_limits = RiskLimits(
-        max_position_size=0.02,     # 2% per position
-        max_total_exposure=0.1,     # 10% total exposure
-        max_open_positions=2,       # Max 2 positions
-        max_daily_loss=0.05,        # 5% daily loss limit
-        max_drawdown=0.99          # 99% drawdown limit (disabled for backtesting)
-    )
-    
-    # Run backtest
-    engine = SqueezeFlowBacktestEngine(
-        start_date=args.start_date,
-        end_date=args.end_date,
-        initial_balance=args.balance,
-        symbols=args.symbols,
-        risk_limits=risk_limits,
-        strategy=strategy,
-        debug_mode=args.debug,
-        show_full_range=args.show_full_range
-    )
-    
-    results = await engine.run_backtest()
-    
-    # Print summary
-    print(f"\n{'='*80}")
-    print(f"🚀 MODULAR SQUEEZEFLOW BACKTEST RESULTS")
-    print(f"{'='*80}")
-    print(f"Strategy: {results['strategy_name']}")
-    print(f"Period: {results['backtest_period']}")
-    print(f"Symbols: {', '.join(results['symbols'])}")
-    print(f"Initial Balance: ${results['initial_balance']:,.2f}")
-    print(f"Final Balance: ${results['final_balance']:,.2f}")
-    print(f"Total Return: {results['total_return_pct']:.2f}% (${results['total_return_usd']:,.2f})")
-    print(f"Total Trades: {results['total_trades']}")
-    print(f"Win Rate: {results['win_rate_pct']:.1f}% ({results['winning_trades']}/{results['total_trades']})")
-    print(f"Average Trade: {results['avg_trade_return_pct']:.2f}%")
-    print(f"Best Trade: {results['best_trade_pct']:.2f}%")
-    print(f"Worst Trade: {results['worst_trade_pct']:.2f}%")
-    print(f"Average Duration: {results['avg_duration_hours']:.1f} hours")
-    print(f"Max Drawdown: {results['max_drawdown_pct']:.2f}%")
-    print(f"Sharpe Ratio: {results['sharpe_ratio']:.2f}")
-    print(f"Profit Factor: {results['profit_factor']:.2f}")
-    print(f"\n💰 COST ANALYSIS:")
-    print(f"Total Trading Costs: ${results['total_trading_costs_usd']:.2f} ({results['trading_costs_pct']:.3f}%)")
-    print(f"Average Cost per Trade: ${results['avg_cost_per_trade']:.2f}")
-    print(f"{'='*80}")
-    
-    # Save detailed results
-    output_file = args.output
-    if not output_file:
-        # Auto-generate output file in logs directory
-        logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
-        os.makedirs(logs_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(logs_dir, f"backtest_results_{timestamp}.json")
-    
-    try:
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2, default=str)
-        print(f"📄 Detailed results saved to: {output_file}")
-    except Exception as e:
-        print(f"⚠️ Warning: Could not save results to {output_file}: {e}")
-    
-    # Show usage instructions for new debug features
-    if not args.debug and not args.show_full_range:
-        print(f"\n💡 TIP: Use --debug to see detailed daily analysis")
-        print(f"💡 TIP: Use --show-full-range to display full requested date range in plots")
+    def _create_failed_result(self, error_message: str) -> Dict:
+        """Create failed result"""
+        return {
+            'success': False,
+            'error': error_message,
+            'initial_balance': self.initial_balance,
+            'final_balance': self.initial_balance,
+            'total_return': 0.0,
+            'total_trades': 0
+        }
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # CLI interface with leverage support
+    import argparse
+    
+    # Handle import for both package and direct script execution
+    try:
+        # Import from new modular strategy location
+        from strategies.squeezeflow.strategy import SqueezeFlowStrategy
+        from strategies.base import BaseStrategy
+    except ImportError:
+        # Direct script execution - add parent directory to path for strategy imports
+        import sys
+        import os
+        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        from strategies.squeezeflow.strategy import SqueezeFlowStrategy
+        from strategies.base import BaseStrategy
+        
+    # Simple debug strategy for testing
+    class SimpleDebugStrategy(BaseStrategy):
+        """Simple debug strategy for testing backtest engine functionality including exits"""
+        
+        def __init__(self):
+            super().__init__(name="SimpleDebugStrategy")
+            self.position_opened = False
+            self.entry_price = None
+            self.entry_trade_id = None
+            
+        def process(self, dataset, portfolio_state):
+            """Generate test orders for debugging both entry and exit functionality"""
+            import pandas as pd
+            from datetime import datetime
+            
+            ohlcv = dataset.get('ohlcv', pd.DataFrame())
+            if ohlcv.empty:
+                return {'orders': [], 'metadata': {'strategy': self.name}}
+                
+            symbol = dataset.get('symbol', 'UNKNOWN')
+            current_price = ohlcv.iloc[-1]['close'] if 'close' in ohlcv.columns else ohlcv.iloc[-1].iloc[3]
+            existing_positions = portfolio_state.get('positions', {})
+            
+            orders = []
+            
+            # If we have no positions and haven't opened one yet, open a position
+            if not existing_positions and not self.position_opened:
+                orders.append({
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'quantity': 0.001,  # Small test quantity
+                    'price': current_price,
+                    'timestamp': datetime.now(),
+                    'signal_type': 'ENTRY',
+                    'signal_id': f"debug_entry_{int(datetime.now().timestamp())}"
+                })
+                self.position_opened = True
+                self.entry_price = current_price
+                
+            # If we have positions and price moved significantly, create exit order
+            elif existing_positions and self.entry_price:
+                # Simple exit logic: exit if price moved 1% in either direction
+                price_change = abs(current_price - self.entry_price) / self.entry_price
+                
+                if price_change > 0.01:  # 1% move
+                    # Create exit order
+                    orders.append({
+                        'symbol': symbol,
+                        'side': 'SELL',  # Exit long position
+                        'quantity': 0.001,
+                        'price': current_price,
+                        'timestamp': datetime.now(),
+                        'signal_type': 'EXIT',
+                        'reason': f'Price moved {price_change:.2%} from entry'
+                    })
+                    self.position_opened = False  # Reset for potential re-entry
+                    self.entry_price = None
+            
+            return {
+                'orders': orders,
+                'metadata': {'strategy': self.name, 'position_opened': self.position_opened}
+            }
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='SqueezeFlow Backtest Engine')
+    parser.add_argument('--symbol', default='BTCUSDT', help='Trading symbol')
+    parser.add_argument('--start-date', default='2024-08-01', help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end-date', default='2024-08-04', help='End date (YYYY-MM-DD)')
+    parser.add_argument('--timeframe', default='5m', help='Timeframe (1m, 5m, 15m, etc.)')
+    parser.add_argument('--balance', type=float, default=10000.0, help='Initial balance')
+    parser.add_argument('--leverage', type=float, default=1.0, help='Trading leverage (default: 1.0)')
+    parser.add_argument('--strategy', default='SqueezeFlowStrategy', help='Strategy class name')
+    
+    args = parser.parse_args()
+    
+    # Create engine with leverage support
+    engine = BacktestEngine(initial_balance=args.balance, leverage=args.leverage)
+    
+    # Load strategy
+    if args.strategy == 'SqueezeFlowStrategy':
+        strategy = SqueezeFlowStrategy()
+    elif args.strategy == 'SimpleDebugStrategy':
+        strategy = SimpleDebugStrategy()
+    else:
+        strategy = SqueezeFlowStrategy()  # Default fallback
+    
+    # Run backtest
+    result = engine.run(
+        strategy=strategy,
+        symbol=args.symbol,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        timeframe=args.timeframe,
+        balance=args.balance,
+        leverage=args.leverage
+    )
+    
+    print(f"Backtest Result: {result['total_return']:.2f}% return")
+    print(f"Leverage Used: {args.leverage}x")
+    print(f"Total Trades: {result['total_trades']}")

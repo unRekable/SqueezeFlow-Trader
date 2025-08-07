@@ -1,469 +1,420 @@
 #!/usr/bin/env python3
 """
-Portfolio Management - Position and Risk Management for Backtest Engine
-Extracted from monolithic engine.py for clean modular architecture
+Portfolio Management - Position tracking and risk management
+Clean state management with realistic fee calculations
 """
 
-import logging
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from enum import Enum
-
-
-class PositionType(Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-
-class PositionStatus(Enum):
-    OPEN = "OPEN"
-    CLOSED = "CLOSED"
-    CANCELLED = "CANCELLED"
 
 
 @dataclass
 class Position:
-    """Trading position with complete lifecycle tracking"""
-    id: str
+    """Individual position tracking with CVD baseline support"""
     symbol: str
-    position_type: PositionType
-    entry_time: datetime
+    side: str  # 'LONG' or 'SHORT'
+    quantity: float
     entry_price: float
-    size: float
-    status: PositionStatus = PositionStatus.OPEN
-    exit_time: Optional[datetime] = None
-    exit_price: Optional[float] = None
+    current_price: float
+    entry_time: datetime
+    trade_id: Optional[int] = None  # Added for CVD baseline tracking
+    signal_id: Optional[str] = None  # Added for signal correlation
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
-    max_drawdown: float = 0.0
-    max_profit: float = 0.0
     fees_paid: float = 0.0
-    exit_reason: str = ""
-    
-    def duration_hours(self, current_time: datetime = None) -> float:
-        """Position duration in hours"""
-        end_time = self.exit_time or current_time or datetime.now(timezone.utc)
-        
-        # Handle timezone-aware/naive datetime mixing
-        if self.entry_time.tzinfo is not None and end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=self.entry_time.tzinfo)
-        elif self.entry_time.tzinfo is None and end_time.tzinfo is not None:
-            entry_time = self.entry_time.replace(tzinfo=end_time.tzinfo)
-            return (end_time - entry_time).total_seconds() / 3600
-        
-        return (end_time - self.entry_time).total_seconds() / 3600
-    
-    @property
-    def pnl_absolute(self) -> float:
-        """Absolute P&L in base currency"""
-        if self.status != PositionStatus.CLOSED or self.exit_price is None:
-            return 0.0
-        
-        if self.position_type == PositionType.LONG:
-            return (self.exit_price - self.entry_price) * self.size - self.fees_paid
-        else:
-            return (self.entry_price - self.exit_price) * self.size - self.fees_paid
-    
-    @property
-    def pnl_percentage(self) -> float:
-        """P&L as percentage of invested capital"""
-        if self.status != PositionStatus.CLOSED:
-            return 0.0
-        invested_capital = self.entry_price * self.size
-        return (self.pnl_absolute / invested_capital) * 100 if invested_capital > 0 else 0.0
+    unrealized_pnl: float = 0.0
+    realized_pnl: float = 0.0
+    closed: bool = False  # Track if position is closed
 
 
-@dataclass
-class RiskLimits:
-    """Risk management configuration"""
-    max_position_size: float = 0.02        # 2% max per position
-    max_total_exposure: float = 0.1        # 10% total exposure
-    max_open_positions: int = 2            # Max concurrent positions
-    max_daily_loss: float = 0.05          # 5% max daily loss
-    max_drawdown: float = 0.15            # 15% max drawdown
-    min_position_size: float = 0.001      # 0.1% minimum position
-    stop_loss_percentage: float = 0.025   # 2.5% stop loss
-    take_profit_percentage: float = 0.04  # 4% take profit
-
-
-class PortfolioManager:
-    """
-    Comprehensive portfolio and risk management system
-    Handles position lifecycle, risk controls, and performance tracking
-    """
+class Portfolio:
+    """Portfolio management with risk controls"""
     
-    def __init__(self, initial_balance: float, risk_limits: RiskLimits = None):
+    def __init__(self, initial_balance: float = 10000.0):
         self.initial_balance = initial_balance
-        self.current_balance = initial_balance
-        self.risk_limits = risk_limits or RiskLimits()
-        
-        # Position tracking
-        self.open_positions: Dict[str, Position] = {}
+        self.cash_balance = initial_balance
+        self.positions: Dict[str, Position] = {}
         self.closed_positions: List[Position] = []
-        self.position_counter = 0
+        self.transaction_history: List[Dict] = []
         
-        # Performance tracking
-        self.daily_pnl: Dict[str, float] = {}
-        self.peak_balance = initial_balance
-        self.max_drawdown_reached = 0.0
+        # Risk parameters
+        self.max_position_size = 0.1  # 10% max per position
+        self.max_total_exposure = 0.5  # 50% max total exposure
+        self.trading_fee = 0.001  # 0.1% trading fee
         
-        self.logger = logging.getLogger('PortfolioManager')
+    def get_state(self) -> Dict:
+        """Get current portfolio state"""
+        total_value = self.cash_balance
+        total_exposure = 0.0
+        unrealized_pnl = 0.0
         
-    def can_open_position(self, symbol: str, position_size_percentage: float) -> Tuple[bool, str]:
-        """
-        Check if a new position can be opened based on risk limits
+        # Calculate current position values
+        for position in self.positions.values():
+            position_value = position.quantity * position.current_price
+            total_value += position_value
+            total_exposure += position_value
+            unrealized_pnl += position.unrealized_pnl
         
-        Returns:
-            (can_open, reason)
-        """
-        # Check if position already exists for this symbol (NO DCA - only 1 position per symbol)
-        for position in self.open_positions.values():
-            if position.symbol == symbol:
-                return False, f"Position already exists for {symbol}: {position.id}"
+        realized_pnl = sum(pos.realized_pnl for pos in self.closed_positions)
+        total_pnl = realized_pnl + unrealized_pnl
         
-        # Check max open positions
-        if len(self.open_positions) >= self.risk_limits.max_open_positions:
-            return False, f"Max open positions reached ({self.risk_limits.max_open_positions})"
+        return {
+            'initial_balance': self.initial_balance,
+            'cash_balance': self.cash_balance,
+            'total_value': total_value,
+            'total_exposure': total_exposure,
+            'exposure_ratio': total_exposure / total_value if total_value > 0 else 0,
+            'open_positions': len(self.positions),
+            'realized_pnl': realized_pnl,
+            'unrealized_pnl': unrealized_pnl,
+            'total_pnl': total_pnl,
+            'total_return': (total_value - self.initial_balance) / self.initial_balance * 100,
+            'positions': {k: self._position_to_dict(v) for k, v in self.positions.items()}
+        }
+    
+    def _position_to_dict(self, position: Position) -> Dict:
+        """Convert position to dictionary"""
+        return {
+            'symbol': position.symbol,
+            'side': position.side,
+            'quantity': position.quantity,
+            'entry_price': position.entry_price,
+            'current_price': position.current_price,
+            'entry_time': position.entry_time,
+            'trade_id': position.trade_id,
+            'signal_id': position.signal_id,
+            'unrealized_pnl': position.unrealized_pnl,
+            'fees_paid': position.fees_paid
+        }
+    
+    def can_open_position(self, symbol: str, quantity: float, price: float) -> bool:
+        """Check if position can be opened within risk limits"""
+        position_value = quantity * price
         
-        # Check position size limits
-        if position_size_percentage > self.risk_limits.max_position_size:
-            return False, f"Position size too large: {position_size_percentage:.3f} > {self.risk_limits.max_position_size}"
-        
-        if position_size_percentage < self.risk_limits.min_position_size:
-            return False, f"Position size too small: {position_size_percentage:.3f} < {self.risk_limits.min_position_size}"
+        # Check maximum position size
+        if position_value > self.initial_balance * self.max_position_size:
+            return False
         
         # Check total exposure
-        current_exposure = self.get_total_exposure()
-        if current_exposure + position_size_percentage > self.risk_limits.max_total_exposure:
-            return False, f"Total exposure limit exceeded: {current_exposure + position_size_percentage:.3f} > {self.risk_limits.max_total_exposure}"
+        current_exposure = sum(pos.quantity * pos.current_price for pos in self.positions.values())
+        if (current_exposure + position_value) > self.initial_balance * self.max_total_exposure:
+            return False
         
-        # Check daily loss limit
-        today = datetime.utcnow().date().isoformat()
-        daily_loss = abs(self.daily_pnl.get(today, 0.0)) / self.initial_balance
-        if daily_loss > self.risk_limits.max_daily_loss:
-            return False, f"Daily loss limit reached: {daily_loss:.3f} > {self.risk_limits.max_daily_loss}"
+        # Check available cash (including fees)
+        required_cash = position_value * (1 + self.trading_fee)
+        if required_cash > self.cash_balance:
+            return False
         
-        # Check drawdown limit
-        current_drawdown = self.get_current_drawdown()
-        if current_drawdown > self.risk_limits.max_drawdown:
-            return False, f"Drawdown limit reached: {current_drawdown:.3f} > {self.risk_limits.max_drawdown}"
-        
-        return True, "Position allowed"
+        return True
     
-    def open_position(self, symbol: str, position_type: PositionType, entry_price: float,
-                     position_size_percentage: float, timestamp: datetime,
-                     stop_loss: float = None, take_profit: float = None) -> Optional[Position]:
-        """
-        Open a new trading position
+    def open_long_position(self, symbol: str, quantity: float, price: float, 
+                          timestamp: datetime, stop_loss: Optional[float] = None,
+                          take_profit: Optional[float] = None, trade_id: Optional[int] = None,
+                          signal_id: Optional[str] = None) -> bool:
+        """Open a long position"""
         
-        Args:
-            symbol: Trading symbol (e.g., 'BTC', 'ETH')
-            position_type: LONG or SHORT
-            entry_price: Entry price
-            position_size_percentage: Position size as percentage of balance
-            timestamp: Entry timestamp
-            stop_loss: Optional stop loss price
-            take_profit: Optional take profit price
-            
-        Returns:
-            Position object if successful, None if rejected
-        """
-        # Check risk limits
-        can_open, reason = self.can_open_position(symbol, position_size_percentage)
-        if not can_open:
-            self.logger.warning(f"Position rejected for {symbol}: {reason}")
-            return None
+        if not self.can_open_position(symbol, quantity, price):
+            return False
         
-        # Calculate position size in units (with division by zero protection)
-        if entry_price <= 0 or pd.isna(entry_price):
-            self.logger.error(f"Cannot open position for {symbol}: invalid entry_price {entry_price}")
-            return None
-            
-        position_value = self.current_balance * position_size_percentage
-        position_size = position_value / entry_price
+        # Calculate fees
+        position_value = quantity * price
+        fees = position_value * self.trading_fee
+        total_cost = position_value + fees
         
-        # Deduct invested capital from balance when opening position
-        self.current_balance -= position_value
-        
-        # Generate position ID
-        self.position_counter += 1
-        position_id = f"{symbol}_{position_type.value}_{self.position_counter:04d}"
-        
-        # Set default stop loss and take profit if not provided
-        if stop_loss is None and position_type == PositionType.LONG:
-            stop_loss = entry_price * (1 - self.risk_limits.stop_loss_percentage)
-        elif stop_loss is None and position_type == PositionType.SHORT:
-            stop_loss = entry_price * (1 + self.risk_limits.stop_loss_percentage)
-            
-        if take_profit is None and position_type == PositionType.LONG:
-            take_profit = entry_price * (1 + self.risk_limits.take_profit_percentage)
-        elif take_profit is None and position_type == PositionType.SHORT:
-            take_profit = entry_price * (1 - self.risk_limits.take_profit_percentage)
+        # Update cash balance
+        self.cash_balance -= total_cost
         
         # Create position
         position = Position(
-            id=position_id,
             symbol=symbol,
-            position_type=position_type,
+            side='LONG',
+            quantity=quantity,
+            entry_price=price,
+            current_price=price,
             entry_time=timestamp,
-            entry_price=entry_price,
-            size=position_size,
+            trade_id=trade_id,
+            signal_id=signal_id,
             stop_loss=stop_loss,
-            take_profit=take_profit
+            take_profit=take_profit,
+            fees_paid=fees
         )
         
         # Store position
-        self.open_positions[position_id] = position
+        position_key = f"{symbol}_LONG_{timestamp.isoformat()}"
+        self.positions[position_key] = position
         
-        self.logger.info(f"Opened {position_type.value} position: {position_id} at {entry_price:.2f} "
-                        f"(size: {position_size:.6f}, value: ${position_value:.2f})")
+        # Record transaction
+        self.transaction_history.append({
+            'timestamp': timestamp,
+            'type': 'OPEN_LONG',
+            'symbol': symbol,
+            'quantity': quantity,
+            'price': price,
+            'fees': fees,
+            'cash_after': self.cash_balance
+        })
         
-        return position
+        return True
     
-    def close_position(self, position_id: str, exit_price: float, timestamp: datetime,
-                      exit_reason: str = "Manual close", trading_fees: float = 0.0) -> Optional[Position]:
-        """
-        Close an existing position
+    def open_short_position(self, symbol: str, quantity: float, price: float,
+                           timestamp: datetime, stop_loss: Optional[float] = None,
+                           take_profit: Optional[float] = None, trade_id: Optional[int] = None,
+                           signal_id: Optional[str] = None) -> bool:
+        """Open a short position"""
         
-        Args:
-            position_id: Position identifier
-            exit_price: Exit price
-            timestamp: Exit timestamp
-            exit_reason: Reason for closing
-            trading_fees: Total fees paid for this trade
-            
-        Returns:
-            Closed position or None if not found
-        """
-        if position_id not in self.open_positions:
-            self.logger.error(f"Position {position_id} not found")
-            return None
+        if not self.can_open_position(symbol, quantity, price):
+            return False
         
-        position = self.open_positions[position_id]
+        # Calculate fees and margin
+        position_value = quantity * price
+        fees = position_value * self.trading_fee
+        margin_required = position_value  # Simple 1:1 margin
+        total_cost = margin_required + fees
         
-        # Update position
-        position.exit_time = timestamp
-        position.exit_price = exit_price
-        position.status = PositionStatus.CLOSED
-        position.exit_reason = exit_reason
-        position.fees_paid = trading_fees
+        # Update cash balance
+        self.cash_balance -= total_cost
         
-        # Calculate P&L and update balance
-        pnl = position.pnl_absolute  # Already includes fees deduction
-        # Only add the P&L to balance (position_value was already deducted at entry)
-        self.current_balance += pnl  # Add P&L only (position value was already deducted)
+        # Create position
+        position = Position(
+            symbol=symbol,
+            side='SHORT',
+            quantity=quantity,
+            entry_price=price,
+            current_price=price,
+            entry_time=timestamp,
+            trade_id=trade_id,
+            signal_id=signal_id,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            fees_paid=fees
+        )
         
-        # Update daily P&L tracking
-        day_key = timestamp.date().isoformat()
-        self.daily_pnl[day_key] = self.daily_pnl.get(day_key, 0.0) + pnl
+        # Store position
+        position_key = f"{symbol}_SHORT_{timestamp.isoformat()}"
+        self.positions[position_key] = position
         
-        # Update peak balance and drawdown tracking
-        if self.current_balance > self.peak_balance:
-            self.peak_balance = self.current_balance
+        # Record transaction
+        self.transaction_history.append({
+            'timestamp': timestamp,
+            'type': 'OPEN_SHORT',
+            'symbol': symbol,
+            'quantity': quantity,
+            'price': price,
+            'fees': fees,
+            'cash_after': self.cash_balance
+        })
         
-        current_drawdown = self.get_current_drawdown()
-        if current_drawdown > self.max_drawdown_reached:
-            self.max_drawdown_reached = current_drawdown
+        return True
+    
+    def close_position(self, position_key: str, price: float, timestamp: datetime) -> bool:
+        """Close a specific position"""
+        
+        if position_key not in self.positions:
+            return False
+        
+        position = self.positions[position_key]
+        
+        # Calculate PnL
+        if position.side == 'LONG':
+            pnl = (price - position.entry_price) * position.quantity
+        else:  # SHORT
+            pnl = (position.entry_price - price) * position.quantity
+        
+        # Calculate closing fees
+        position_value = position.quantity * price
+        closing_fees = position_value * self.trading_fee
+        net_pnl = pnl - closing_fees
+        
+        # Update cash balance
+        if position.side == 'LONG':
+            self.cash_balance += position_value - closing_fees
+        else:  # SHORT
+            # Return margin + PnL
+            self.cash_balance += (position.quantity * position.entry_price) + net_pnl
+        
+        # Update position for final record
+        position.current_price = price
+        position.realized_pnl = net_pnl
+        position.fees_paid += closing_fees
+        position.closed = True  # Mark as closed
         
         # Move to closed positions
         self.closed_positions.append(position)
-        del self.open_positions[position_id]
+        del self.positions[position_key]
         
-        self.logger.info(f"Closed position {position_id}: {exit_reason} at {exit_price:.2f} "
-                        f"(P&L: ${pnl:.2f}, {position.pnl_percentage:.2f}%)")
+        # Record transaction
+        self.transaction_history.append({
+            'timestamp': timestamp,
+            'type': 'CLOSE_POSITION',
+            'symbol': position.symbol,
+            'side': position.side,
+            'quantity': position.quantity,
+            'entry_price': position.entry_price,
+            'exit_price': price,
+            'pnl': net_pnl,
+            'fees': closing_fees,
+            'cash_after': self.cash_balance
+        })
         
-        return position
+        return True
     
-    def update_position_metrics(self, current_prices: Dict[str, float], timestamp: datetime):
-        """Update max drawdown and profit for all open positions"""
-        for position in self.open_positions.values():
-            if position.symbol in current_prices:
-                current_price = current_prices[position.symbol]
+    def update_position_prices(self, symbol_prices: Dict[str, float]):
+        """Update current prices for all positions"""
+        
+        for position in self.positions.values():
+            if position.symbol in symbol_prices:
+                new_price = symbol_prices[position.symbol]
+                position.current_price = new_price
                 
-                # Calculate unrealized P&L
-                if position.position_type == PositionType.LONG:
-                    unrealized_pnl = (current_price - position.entry_price) * position.size
-                else:
-                    unrealized_pnl = (position.entry_price - current_price) * position.size
-                
-                # Update max profit and drawdown
-                if unrealized_pnl > position.max_profit:
-                    position.max_profit = unrealized_pnl
-                
-                if unrealized_pnl < position.max_drawdown:
-                    position.max_drawdown = unrealized_pnl
+                # Calculate unrealized PnL
+                if position.side == 'LONG':
+                    position.unrealized_pnl = (new_price - position.entry_price) * position.quantity
+                else:  # SHORT
+                    position.unrealized_pnl = (position.entry_price - new_price) * position.quantity
     
-    def check_stop_loss_take_profit(self, current_prices: Dict[str, float], 
-                                   timestamp: datetime) -> List[str]:
-        """
-        Check all open positions for stop loss and take profit triggers
-        
-        Returns:
-            List of position IDs that should be closed
-        """
-        positions_to_close = []
-        
-        for position_id, position in self.open_positions.items():
-            if position.symbol not in current_prices:
-                continue
-                
-            current_price = current_prices[position.symbol]
-            should_close = False
-            exit_reason = ""
-            
-            # Check stop loss
-            if position.stop_loss is not None:
-                if position.position_type == PositionType.LONG and current_price <= position.stop_loss:
-                    should_close = True
-                    exit_reason = "Stop Loss"
-                elif position.position_type == PositionType.SHORT and current_price >= position.stop_loss:
-                    should_close = True
-                    exit_reason = "Stop Loss"
-            
-            # Check take profit
-            if not should_close and position.take_profit is not None:
-                if position.position_type == PositionType.LONG and current_price >= position.take_profit:
-                    should_close = True
-                    exit_reason = "Take Profit"
-                elif position.position_type == PositionType.SHORT and current_price <= position.take_profit:
-                    should_close = True
-                    exit_reason = "Take Profit"
-            
-            if should_close:
-                positions_to_close.append(position_id)
-                self.logger.info(f"Position {position_id} triggered {exit_reason} at {current_price:.2f}")
-        
-        return positions_to_close
-    
-    def get_total_exposure(self) -> float:
-        """Calculate total exposure as percentage of balance"""
-        total_exposure = 0.0
-        for position in self.open_positions.values():
-            position_value = position.entry_price * position.size
-            exposure_pct = position_value / self.current_balance
-            total_exposure += exposure_pct
-        return total_exposure
-    
-    def get_current_drawdown(self) -> float:
-        """Calculate current drawdown from peak"""
-        if self.peak_balance <= 0:
-            return 0.0
-        return (self.peak_balance - self.current_balance) / self.peak_balance
-    
-    def get_performance_metrics(self) -> Dict[str, Any]:
+    def get_performance_metrics(self) -> Dict:
         """Calculate comprehensive performance metrics"""
-        if not self.closed_positions:
+        
+        if not self.closed_positions and not self.positions:
             return {
                 'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
                 'win_rate': 0.0,
-                'total_pnl': 0.0,
-                'total_return': 0.0,
-                'max_drawdown': 0.0,
-                'sharpe_ratio': 0.0,
+                'average_win': 0.0,
+                'average_loss': 0.0,
                 'profit_factor': 0.0,
-                'avg_win': 0.0,
-                'avg_loss': 0.0,
-                'largest_win_pct': 0.0,
-                'largest_loss_pct': 0.0
+                'max_drawdown': 0.0,
+                'sharpe_ratio': 0.0
             }
         
-        # Basic metrics
-        total_trades = len(self.closed_positions)
-        winning_trades = [p for p in self.closed_positions if p.pnl_absolute > 0]
-        losing_trades = [p for p in self.closed_positions if p.pnl_absolute < 0]
+        # Closed positions analysis
+        closed_pnls = [pos.realized_pnl for pos in self.closed_positions]
+        winning_trades = [pnl for pnl in closed_pnls if pnl > 0]
+        losing_trades = [pnl for pnl in closed_pnls if pnl < 0]
         
-        win_rate = len(winning_trades) / total_trades * 100 if total_trades > 0 else 0.0
-        total_pnl = sum(p.pnl_absolute for p in self.closed_positions)
+        # Calculate metrics
+        total_trades = len(closed_pnls)
+        win_count = len(winning_trades)
+        loss_count = len(losing_trades)
+        win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
         
-        # Trade returns for distribution plotting
-        trade_returns = [p.pnl_percentage * 100 for p in self.closed_positions]  # Convert to percentages
+        avg_win = sum(winning_trades) / len(winning_trades) if winning_trades else 0
+        avg_loss = sum(losing_trades) / len(losing_trades) if losing_trades else 0
         
-        # Protect against invalid balance calculations
-        if np.isnan(self.current_balance) or np.isinf(self.current_balance) or self.current_balance <= 0:
-            self.logger.warning(f"Invalid current balance: {self.current_balance}, resetting to initial balance")
-            self.current_balance = max(self.initial_balance + total_pnl, 0.01)  # Ensure positive balance
-            
-        total_return = (self.current_balance - self.initial_balance) / self.initial_balance * 100
+        gross_profit = sum(winning_trades)
+        gross_loss = abs(sum(losing_trades))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
         
-        # Win/Loss statistics
-        avg_win = np.mean([p.pnl_absolute for p in winning_trades]) if winning_trades else 0.0
-        avg_loss = np.mean([p.pnl_absolute for p in losing_trades]) if losing_trades else 0.0
-        
-        # FIXED: Use percentage returns for largest_win/loss, not absolute P&L
-        largest_win_pct = max([p.pnl_percentage for p in winning_trades]) if winning_trades else 0.0
-        largest_loss_pct = min([p.pnl_percentage for p in losing_trades]) if losing_trades else 0.0
-        
-        # Profit factor - handle edge cases properly
-        gross_profit = sum(p.pnl_absolute for p in winning_trades)
-        gross_loss = abs(sum(p.pnl_absolute for p in losing_trades))
-        
-        if gross_loss > 0 and gross_profit > 0:
-            profit_factor = gross_profit / gross_loss
-        elif gross_profit > 0 and gross_loss == 0:
-            profit_factor = float('inf')  # All winning trades
-        else:
-            profit_factor = 0.0  # No profit or all losing trades
-        
-        # Sharpe ratio (simplified - assumes daily returns)
-        daily_returns = list(self.daily_pnl.values())
-        if len(daily_returns) > 1:
-            avg_daily_return = np.mean(daily_returns)
-            std_daily_return = np.std(daily_returns)
-            sharpe_ratio = (avg_daily_return / std_daily_return) * np.sqrt(365) if std_daily_return > 0 else 0.0
-        else:
-            sharpe_ratio = 0.0
+        # Calculate max drawdown from transaction history
+        max_drawdown = self._calculate_max_drawdown()
         
         return {
             'total_trades': total_trades,
-            'winning_trades': len(winning_trades),
-            'losing_trades': len(losing_trades),
+            'winning_trades': win_count,
+            'losing_trades': loss_count,
             'win_rate': win_rate,
-            'total_pnl': total_pnl,
-            'total_return': total_return,
-            'max_drawdown': self.max_drawdown_reached * 100,
-            'current_balance': self.current_balance,
-            'peak_balance': self.peak_balance,
-            'sharpe_ratio': sharpe_ratio,
+            'average_win': avg_win,
+            'average_loss': avg_loss,
             'profit_factor': profit_factor,
-            'avg_win': avg_win,
-            'avg_loss': avg_loss,
-            'largest_win_pct': largest_win_pct,
-            'largest_loss_pct': largest_loss_pct,
-            'avg_trade_duration': np.mean([p.duration_hours() for p in self.closed_positions]),
-            'total_fees': sum(p.fees_paid for p in self.closed_positions),
-            'trade_returns': trade_returns  # Add trade returns for plotting
+            'gross_profit': gross_profit,
+            'gross_loss': gross_loss,
+            'max_drawdown': max_drawdown,
+            'total_fees_paid': sum(pos.fees_paid for pos in self.closed_positions + list(self.positions.values()))
         }
     
-    def get_equity_curve(self) -> pd.DataFrame:
-        """Generate equity curve data for plotting"""
-        if not self.closed_positions:
-            return pd.DataFrame({'timestamp': [datetime.utcnow()], 'balance': [self.initial_balance], 'trade_pnl': [0.0]})
+    def close_position_by_trade_id(self, trade_id: int, price: float, timestamp: datetime) -> Optional[Dict]:
+        """Close position by trade_id"""
+        position_key = None
+        for key, position in self.positions.items():
+            if position.trade_id == trade_id:
+                position_key = key
+                break
         
-        # Sort positions by exit time
-        sorted_positions = sorted(self.closed_positions, key=lambda p: p.exit_time)
+        if position_key and self.close_position(position_key, price, timestamp):
+            return {
+                'status': 'closed',
+                'position_key': position_key,
+                'trade_id': trade_id,
+                'exit_price': price,
+                'timestamp': timestamp
+            }
         
-        equity_data = []
+        return None
+    
+    def close_position_by_signal_id(self, signal_id: str, price: float, timestamp: datetime) -> Optional[Dict]:
+        """Close position by signal_id"""
+        position_key = None
+        for key, position in self.positions.items():
+            if position.signal_id == signal_id:
+                position_key = key
+                break
+        
+        if position_key and self.close_position(position_key, price, timestamp):
+            return {
+                'status': 'closed',
+                'position_key': position_key,
+                'signal_id': signal_id,
+                'exit_price': price,
+                'timestamp': timestamp
+            }
+        
+        return None
+    
+    def close_matching_position(self, symbol: str, side: str, price: float, timestamp: datetime) -> Optional[Dict]:
+        """Close the most recent matching position by symbol and side"""
+        matching_positions = []
+        
+        # Find all matching positions
+        for key, position in self.positions.items():
+            if position.symbol == symbol and position.side.upper() == side.upper():
+                matching_positions.append((key, position))
+        
+        if not matching_positions:
+            return None
+        
+        # Sort by entry time (most recent first)
+        matching_positions.sort(key=lambda x: x[1].entry_time, reverse=True)
+        position_key = matching_positions[0][0]
+        
+        if self.close_position(position_key, price, timestamp):
+            return {
+                'status': 'closed',
+                'position_key': position_key,
+                'symbol': symbol,
+                'side': side,
+                'exit_price': price,
+                'timestamp': timestamp
+            }
+        
+        return None
+    
+    def _calculate_max_drawdown(self) -> float:
+        """Calculate maximum drawdown from transaction history"""
+        
+        if not self.transaction_history:
+            return 0.0
+        
+        # Build equity curve
+        equity_curve = [self.initial_balance]
         running_balance = self.initial_balance
         
-        # FIXED: Add initial balance point at the start
-        first_trade_time = sorted_positions[0].entry_time if sorted_positions else datetime.utcnow()
-        equity_data.append({
-            'timestamp': first_trade_time,
-            'balance': self.initial_balance,
-            'trade_pnl': 0.0,
-            'position_id': 'INITIAL'
-        })
+        for transaction in self.transaction_history:
+            if transaction['type'] == 'CLOSE_POSITION':
+                running_balance += transaction['pnl']
+                equity_curve.append(running_balance)
         
-        for position in sorted_positions:
-            running_balance += position.pnl_absolute
-            equity_data.append({
-                'timestamp': position.exit_time,
-                'balance': running_balance,
-                'trade_pnl': position.pnl_absolute,
-                'position_id': position.id
-            })
+        # Calculate drawdown
+        peak = equity_curve[0]
+        max_drawdown = 0.0
         
-        return pd.DataFrame(equity_data)
+        for value in equity_curve:
+            if value > peak:
+                peak = value
+            drawdown = (peak - value) / peak * 100
+            max_drawdown = max(max_drawdown, drawdown)
+        
+        return max_drawdown

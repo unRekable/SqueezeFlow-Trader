@@ -4,12 +4,22 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Testing](https://img.shields.io/badge/tests-100%25%20passing-green.svg)](#testing)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Testing](https://img.shields.io/badge/tests-passing-green.svg)](#testing)
+[![Production](https://img.shields.io/badge/status-development-yellow.svg)](#development)
 
 ## 🎯 Core Concept
 
-SqueezeFlow Trader detects market "squeeze" conditions through **Cumulative Volume Delta (CVD) divergence analysis** between spot and futures markets. The system identifies high-probability trading opportunities by analyzing volume flow patterns across 24+ exchanges using a sophisticated multi-timeframe approach.
+SqueezeFlow Trader detects market "squeeze" conditions through **Cumulative Volume Delta (CVD) divergence analysis** between spot and futures markets. The system identifies high-probability trading opportunities by analyzing volume flow patterns across multiple exchanges using a sophisticated multi-timeframe approach.
+
+## 🚀 System Overview
+
+**Professional Trading System** - Advanced cryptocurrency trading with CVD-based squeeze detection
+
+- **Unlimited Asset Support**: Trade any cryptocurrency pair across supported exchanges
+- **Real-Time Processing**: Low-latency signal generation and execution
+- **Complete Integration**: Full pipeline from market data collection to automated trade execution
+- **Scalable Architecture**: Docker-based microservices with comprehensive monitoring
 
 ### Squeeze Detection Algorithm
 
@@ -20,62 +30,68 @@ SqueezeFlow Trader detects market "squeeze" conditions through **Cumulative Volu
 
 ## 🏗️ System Architecture
 
+### Project Structure
+
+```mermaid
+graph TD
+    A[SqueezeFlow Trader] --> B[aggr-server]
+    A --> C[backtest]
+    A --> D[data]
+    A --> E[docs]
+    A --> F[freqtrade]
+    A --> G[services]
+    A --> H[strategies]
+    A --> I[utils]
+    
+    B --> B1[Real-time data collection]
+    C --> C1[engine.py]
+    C --> C2[portfolio.py]
+    C --> C3[reporting]
+    D --> D1[loaders]
+    D --> D2[processors]
+    D --> D3[pipeline.py]
+    G --> G1[strategy_runner.py]
+    G --> G2[unified_config.py]
+    G --> G3[monitoring services]
+    H --> H1[squeezeflow strategy]
+    H --> H2[base.py]
+```
+
 ### Microservices Data Pipeline
 ```
-Exchange APIs → aggr-server → InfluxDB → Multi-Timeframe CQs → Symbol/Market Discovery → SqueezeFlow Calculator → Redis → FreqTrade → Order Execution
+Exchange APIs → aggr-server → InfluxDB → Multi-Timeframe CQs → Symbol/Market Discovery → Strategy Runner → Redis → FreqTrade → Order Execution
                                     ↓
                             Modular Backtest Engine → Strategy Testing → Performance Analysis
 ```
 
 ### Core Components
 
-#### 🔧 **New Modular Backtest Engine** (`/backtest/`)
-**Complete architectural redesign following industry standards:**
+#### 🔧 **Backtest Engine** (`/backtest/`)
+Streamlined backtesting system for strategy validation:
 
-```
-/backtest/
-├── engine.py                    # Main backtest orchestrator
-├── core/                        # Core trading components
-│   ├── strategy.py              # Base strategy interface & abstractions  
-│   ├── portfolio.py             # Portfolio & position management
-│   └── fees.py                  # Realistic trading cost calculations
-├── strategies/                  # Trading strategy implementations
-│   ├── squeezeflow_strategy.py  # Complete SqueezeFlow methodology (58KB)
-│   └── debug_strategy.py        # Debug/testing strategies
-├── analysis/                    # Data analysis frameworks
-│   └── cvd_data_analyzer.py     # CVD pattern analysis tools
-├── visualization/               # Professional plotting system
-│   └── plotter.py              # Comprehensive backtest visualizations
-├── strategy_logging/            # Specialized logging framework
-│   └── strategy_logger.py      # Strategy-specific logging with rotation
-├── results/                     # Organized output management
-│   ├── logs/                   # Timestamped execution logs
-│   ├── images/                 # Generated charts & visualizations
-│   └── debug/                  # Debug outputs & analysis
-└── tests/                      # 100% passing unit test suite
-    ├── run_tests.py            # Enhanced test runner with coverage
-    ├── test_portfolio.py       # Portfolio management tests
-    ├── test_fees.py           # Fee calculation system tests
-    └── test_strategies.py     # Strategy interface tests
-```
+- `engine.py` - Main backtest orchestrator with data loading and execution
+- `core/portfolio.py` - Portfolio management and position tracking
+- `reporting/` - HTML reports, charts, and performance metrics
+- `results/` - Backtest outputs and historical runs
 
-**Key Features:**
-- **Modular Architecture**: Clean separation of concerns with pluggable components
-- **Industry-Standard Design**: Professional Python package structure with proper `__init__.py` files
-- **Comprehensive Testing**: 42 unit tests with 100% pass rate and real API validation
-- **Advanced Logging**: Multi-channel logging with timestamped files and CSV signal analysis
-- **Realistic Fee Modeling**: Exchange-specific fee structures with weighted average calculations
+#### 📊 **Trading Strategy** (`/strategies/squeezeflow/`)
+5-phase trading methodology implementation:
 
-#### 📊 **Enhanced Data Infrastructure**
-**Multi-timeframe architecture with automated aggregation:**
+- `strategy.py` - Main strategy class
+- `components/` - Phase implementations (context, divergence, reset, scoring, exits)
+- `config.py` - Strategy parameters and thresholds
+- `baseline_manager.py` - CVD baseline tracking
+
+#### 📊 **Data Infrastructure**
+Multi-timeframe architecture with automated aggregation:
 
 - **Base Data**: 1-minute OHLCV + Volume from aggr-server
 - **Continuous Queries**: 5 automated CQs creating higher timeframes (5m, 15m, 30m, 1h, 4h)
 - **Data Retention**: 30-day rolling window with efficient storage
 - **CVD Integration**: Industry-verified cumulative calculations with proper normalization
 
-#### 🎯 **Advanced Market Discovery System** (`utils/`)
-**Data-driven discovery replacing hardcoded lists:**
+#### 🎯 **Market Discovery System** (`utils/`)
+Data-driven discovery for robust market detection:
 
 - **Symbol Discovery**: Automatic detection from InfluxDB with quality validation
 - **Market Discovery**: Robust SPOT/PERP classification via Exchange Mapper  
@@ -83,16 +99,19 @@ Exchange APIs → aggr-server → InfluxDB → Multi-Timeframe CQs → Symbol/Ma
 - **Quality Assurance**: Minimum 500 data points in 24h requirement with coverage validation
 
 #### 🧮 **Professional Trading Strategy**
-**Complete implementation in `docs/strategy/SqueezeFlow.md`**
+Complete implementation documented in [`docs/squeezeflow_strategy.md`](docs/squeezeflow_strategy.md)
 
 The strategy follows a sophisticated 5-phase methodology:
-1. **Context Assessment**: Multi-timeframe environment analysis
-2. **Divergence Detection**: CVD imbalance identification  
-3. **Reset Detection**: Market equilibrium recognition
-4. **Entry Signal**: Precise timing with absorption confirmation
-5. **Position Management**: Flow-following exit logic
+1. **Context Assessment**: Multi-timeframe environment analysis (1h/4h timeframes)
+2. **Divergence Detection**: CVD imbalance identification between spot and futures
+3. **Reset Detection**: Market equilibrium recognition and convergence exhaustion
+4. **Entry Signal**: Precise timing with 10-point scoring system and absorption confirmation
+5. **Position Management**: Flow-following exit logic without fixed targets
 
-For complete strategy documentation, see [`docs/strategy/SqueezeFlow.md`](docs/strategy/SqueezeFlow.md)
+**Key Documentation:**
+- **[Complete Strategy Guide](docs/squeezeflow_strategy.md)**: 478-line comprehensive methodology
+- **[CVD Calculation Methods](docs/cvd_baseline_tracking.md)**: Mathematical foundations and verification
+- **[Signal Generation Process](docs/signal_generation_workflow.md)**: End-to-end pipeline documentation
 
 ## 🚀 Quick Start
 
@@ -104,10 +123,10 @@ For complete strategy documentation, see [`docs/strategy/SqueezeFlow.md`](docs/s
 ### 1. System Setup
 ```bash
 # Clone repository
-git clone https://github.com/your-username/SqueezeFlow-Trader.git
+git clone https://github.com/unRekable/SqueezeFlow-Trader.git
 cd SqueezeFlow-Trader
 
-# Initialize system with environment detection
+# Initialize system (configuration in docker-compose.yml)
 python init.py --mode development
 
 # Validate complete setup
@@ -122,40 +141,45 @@ python main.py start --dry-run
 # Full production deployment
 ./start.sh
 
+# Start monitoring services specifically
+./scripts/start_monitoring.sh
+
+# Start signal monitoring dashboard
+docker-compose up -d signal-monitor-dashboard
+
 # System health monitoring
 python status.py
+
+# Check current configuration
+docker exec squeezeflow-strategy-runner env | grep -E "SQUEEZEFLOW|REDIS|INFLUX|FREQTRADE"
 ```
 
 ### 3. Access Interfaces
-- **FreqTrade UI**: http://localhost:8081  
-- **aggr-server Data**: http://localhost:3000
-- **Chronograf (InfluxDB Admin)**: http://localhost:8885
-- **System Logs**: `data/logs/squeezeflow.log`
+- **FreqTrade UI**: http://localhost:8080
+- **Health Monitor**: http://localhost:8090
+- **Signal Dashboard**: `docker attach squeezeflow-signal-dashboard`
+- **aggr-server**: http://localhost:3000
+- **Chronograf**: http://localhost:8885
 
 ## 🧪 Testing & Validation
 
-### New Modular Backtest Engine
+### Running Backtests
 ```bash
-# Quick backtest with new engine
+# Run backtest with default settings
+python run_backtest.py
+
+# Backtest with specific timeframe
 python run_backtest.py last_week
-
-# Custom parameters with balance
-python run_backtest.py last_month 20000
-
-# Advanced backtest with date range
-python backtest/engine.py --start-date 2025-01-01 --end-date 2025-01-31 --balance 50000 --strategy squeezeflow_strategy
+python run_backtest.py last_month
 ```
 
-### Comprehensive Unit Testing
+### System Testing
 ```bash
-# Run complete test suite (100% passing)
-python backtest/tests/run_tests.py
+# System validation
+python validate_setup.py
 
-# Test specific components
-python backtest/tests/run_tests.py --test test_portfolio.TestPortfolioManager
-
-# Coverage analysis
-python backtest/tests/run_tests.py --coverage
+# Component health checks
+python status.py
 ```
 
 ### System Validation
@@ -170,10 +194,122 @@ python status.py
 python utils/cvd_analysis_tool.py BTC --hours 24 --timeframe 5m
 ```
 
+## 👩‍💻 For Developers
+
+The SqueezeFlow Trader system is designed with developers in mind, providing comprehensive documentation, modular architecture, and extensive customization options.
+
+### 🚀 **Getting Started for Development**
+
+1. **Architecture Overview**: Start with [System Architecture (CLAUDE.md)](CLAUDE.md) for complete technical specifications
+2. **Service Design**: Review [Services Architecture](docs/services_architecture.md) for microservices patterns
+3. **Strategy Development**: Study [Backtest Engine](docs/backtest_engine.md) for strategy framework
+4. **Signal Processing**: Understand [Signal Generation Workflow](docs/signal_generation_workflow.md) for data pipeline
+
+### 🏗️ **Development Resources**
+
+#### **Core Documentation**
+- **[CLAUDE.md](CLAUDE.md)**: Complete technical reference (500+ lines) - Your primary development guide
+- **[Services Architecture](docs/services_architecture.md)**: Microservices design patterns and API specifications
+- **[Backtest Engine](docs/backtest_engine.md)**: Modular testing framework for strategy development
+
+#### **Customization Guides**
+- **[Trading Strategy Development](docs/squeezeflow_strategy.md)**: 5-phase methodology implementation
+- **[CVD Calculation Methods](docs/cvd_baseline_tracking.md)**: Mathematical foundations and customization
+- **[Signal Pipeline Customization](docs/signal_generation_workflow.md)**: End-to-end processing flow
+
+### 🛠️ **Development Workflow**
+
+#### **Local Development Setup**
+```bash
+# Development environment with debug logging
+python init.py --mode development
+# Set debug in docker-compose.yml: SQUEEZEFLOW_LOG_LEVEL=DEBUG
+
+# Run specific components for testing
+docker-compose up -d aggr-influx squeezeflow-redis  # Core services only
+python services/strategy_runner.py --debug          # Strategy development
+python backtest/engine.py --debug                   # Backtest development
+```
+
+#### **Testing & Validation**
+```bash
+# Strategy testing framework
+python -m backtest.engine --strategy custom_strategy --debug
+python services/test_enhanced_signals.py
+
+# Service integration testing
+python validate_setup.py --component services
+python status.py
+```
+
+### 🔧 **Customization Points**
+
+#### **Strategy Development**
+- **Modular Strategy System**: `/strategies/` folder with pluggable components
+- **Base Strategy Interface**: Extend `BaseStrategy` class for custom implementations
+- **5-Phase Framework**: Customize individual phases in `/strategies/squeezeflow/components/`
+
+#### **Service Extensions**
+- **Custom Signal Processors**: Extend signal generation pipeline
+- **Exchange Integration**: Add new exchange support via discovery services
+- **Data Processing**: Custom CVD calculation methods and market analysis
+
+#### **Configuration Management**
+- **Unified Configuration**: All settings via docker-compose.yml environment variables
+- **Environment Override**: Easy per-environment configuration
+- **Dynamic Discovery**: Symbol, market, and OI discovery services
+
+### 📊 **Development Tools**
+
+#### **Debugging & Monitoring**
+- **Multi-Channel Logging**: Comprehensive logging with rotation and analysis
+- **Real-Time Monitoring**: Service health checks and performance metrics
+- **Data Validation**: CVD calculation verification and market data quality checks
+
+#### **Testing Framework**
+- **Unit Testing**: Comprehensive test suite with 100% coverage goals
+- **Integration Testing**: End-to-end system validation
+- **Performance Testing**: Load testing and optimization analysis
+
+### 🎯 **Common Development Tasks**
+
+<details>
+<summary><strong>Adding a New Trading Strategy</strong></summary>
+
+1. **Create Strategy Module**: Extend `BaseStrategy` in `/strategies/your_strategy/`
+2. **Implement 5-Phase Interface**: Override phase methods for custom logic
+3. **Test with Backtest Engine**: Use modular testing framework
+4. **Integration**: Register strategy with services and FreqTrade
+
+**Reference**: [Backtest Engine Documentation](docs/backtest_engine.md)
+
+</details>
+
+<details>
+<summary><strong>Customizing Signal Generation</strong></summary>
+
+1. **Understand Pipeline**: Review [Signal Generation Workflow](docs/signal_generation_workflow.md)
+2. **Modify CVD Calculation**: Customize in [CVD Baseline Tracking](docs/cvd_baseline_tracking.md)
+3. **Update Strategy Runner**: Modify `/services/strategy_runner.py`
+4. **Test Signal Flow**: Validate with `test_enhanced_signals.py`
+
+</details>
+
+<details>
+<summary><strong>Adding New Exchange Support</strong></summary>
+
+1. **Review Discovery Services**: Study `/utils/` folder architecture
+2. **Update Exchange Mapper**: Add exchange classification rules
+3. **Test Data Collection**: Validate with `symbol_discovery.py`
+4. **Service Integration**: Update strategy runner and FreqTrade configuration
+
+</details>
+
+
 ## 📈 Multi-Timeframe Data Architecture
 
-### Automated InfluxDB Continuous Queries
-The system maintains **5 automated timeframe aggregations** for optimal performance:
+### InfluxDB Continuous Queries
+The system maintains 5 automated timeframe aggregations for optimal performance:
 
 ```sql
 -- Example: 5-minute aggregation from 1-minute base data
@@ -205,148 +341,142 @@ END
 ## 📊 Trading Strategy Logic
 
 ### CVD Calculation Methodology
-```python
-# Industry-standard CVD calculation (verified against professional platforms)
-def calculate_cvd(price_data, volume_data):
-    # Step 1: Calculate per-period volume delta
-    volume_delta = volume_data['vbuy'] - volume_data['vsell']
-    
-    # Step 2: Calculate CUMULATIVE Volume Delta (running total)
-    cvd = volume_delta.cumsum()  # Critical: cumulative sum over time
-    
-    # Step 3: Multi-timeframe trend analysis
-    cvd_trends = {}
-    for timeframe in [5, 10, 15, 30, 60, 120, 240]:  # minutes
-        trend = np.polyfit(range(timeframe), cvd.tail(timeframe), 1)[0]
-        cvd_trends[f'{timeframe}m'] = trend
-    
-    return cvd, cvd_trends
-```
+The system implements industry-standard CVD (Cumulative Volume Delta) calculation:
 
-### Real Market Coverage
-- **Multi-Exchange Support**: 24+ exchanges via aggr-server integration
-- **Current Pairs**: BTC/USDT, ETH/USDT (expandable to additional pairs)  
-- **Symbol Discovery**: Database-driven detection of available trading pairs
-- **Data Quality**: Minimum thresholds with coverage validation
+1. **Volume Delta**: Calculate buy volume minus sell volume per period
+2. **Cumulative Sum**: Running total of volume delta over time
+3. **Multi-timeframe Analysis**: Trend analysis across multiple timeframes
+4. **Divergence Detection**: Compare spot vs futures CVD for squeeze signals
+
+Implementation details in `/data/processors/cvd_calculator.py`
+
+### Market Coverage
+- **Multi-Exchange Support**: 20+ exchanges via aggr-server integration
+- **Dynamic Market Discovery**: Automatic detection of available markets from database
+- **Quality Validation**: Minimum data point requirements for reliable signals
+- **Multi-Exchange Support**: Aggregated data from multiple exchanges via aggr-server
 
 ### Entry/Exit Logic
-**Detailed strategy logic documented in [`docs/strategy/SqueezeFlow.md`](docs/strategy/SqueezeFlow.md)**
+**Detailed strategy logic documented in comprehensive documentation:**
+- **[Complete Strategy Methodology](docs/squeezeflow_strategy.md)**: 5-phase systematic approach (478 lines)
+- **[Signal Generation Pipeline](docs/signal_generation_workflow.md)**: End-to-end processing workflow
+- **[CVD Calculation & Analysis](docs/cvd_baseline_tracking.md)**: Mathematical foundations
 
 **Key Features:**
-- **Multi-Phase Analysis**: 5-stage systematic approach
-- **Dynamic Thresholds**: Adaptive scaling based on market volatility
-- **CVD Leadership Patterns**: SPOT vs PERP analysis with preference weighting
-- **Risk Management**: Position sizing, stop losses, and drawdown protection
+- **Multi-Phase Analysis**: 5-stage systematic approach with 10-point scoring system
+- **Dynamic Thresholds**: Adaptive scaling based on market volatility and volume patterns
+- **CVD Leadership Patterns**: SPOT vs PERP analysis with divergence detection
+- **Flow-Following Exits**: No fixed targets, exits based on market structure invalidation
+- **Risk Management**: Position sizing by confidence score, comprehensive risk controls
 
 ## 🔧 Configuration System
 
-### Hierarchical Configuration Structure
-```
-config/
-├── config.yaml              # Main system settings & modes
-├── exchanges.yaml            # API credentials & rate limits
-├── risk_management.yaml      # Position sizing & risk controls
-├── trading_parameters.yaml   # Strategy thresholds & timeframes
-├── ml_config.yaml           # FreqAI machine learning settings
-├── execution_config.yaml    # Order execution parameters
-└── feature_toggles.yaml     # Feature flags & environment switches
-```
+### Unified Environment Variables
+All configuration is managed through environment variables in `docker-compose.yml`. See [Configuration Guide](docs/unified_configuration.md) for complete reference.
 
-### Key Trading Parameters
 ```yaml
-# Multi-timeframe configuration
-timeframes:
-  base: "1m"                    # Base data collection
-  entry_timing: ["5m", "15m"]   # Entry signal generation
-  trend_analysis: ["30m", "1h"] # Trend and context analysis
-  regime_detection: "4h"        # Market regime identification
-
-# CVD Analysis (with dynamic scaling)
-cvd_analysis:
-  min_data_points: 240          # Minimum lookback requirement
-  trend_normalization: 100000   # Base normalization factor
-  convergence_threshold: 0.6    # CVD convergence detection
-  reset_detection: true         # Enable reset pattern recognition
-
-# Risk Management (configured via /config/risk_management.yaml)
-position_sizing:
-  max_position_size: 0.02       # 2% maximum per position
-  max_total_exposure: 0.1       # 10% total portfolio exposure
-  min_position_size: 0.001      # 0.1% minimum per position
-
-risk_limits:
-  max_consecutive_losses: 5     # Maximum consecutive losses  
-  max_daily_loss: 0.05         # 5% maximum daily loss
-  max_drawdown: 0.15           # 15% maximum drawdown
+# Example configuration in docker-compose.yml
+environment:
+  - SQUEEZEFLOW_RUN_INTERVAL=60
+  - SQUEEZEFLOW_MAX_SYMBOLS=5
+  - SQUEEZEFLOW_TIMEFRAME=5m
+  - REDIS_HOST=redis
+  - INFLUX_HOST=aggr-influx
+  - FREQTRADE_API_URL=http://freqtrade:8080
 ```
+
+### Key Configuration Variables
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SQUEEZEFLOW_RUN_INTERVAL` | 60 | Strategy execution interval (seconds) |
+| `SQUEEZEFLOW_MAX_SYMBOLS` | 5 | Maximum symbols per cycle |
+| `SQUEEZEFLOW_LOOKBACK_HOURS` | 4 | Historical data lookback |
+| `SQUEEZEFLOW_TIMEFRAME` | 5m | Default timeframe |
+| `REDIS_HOST` | redis | Redis hostname |
+| `INFLUX_HOST` | aggr-influx | InfluxDB hostname |
+| `FREQTRADE_API_URL` | http://freqtrade:8080 | FreqTrade API endpoint |
+
+For complete configuration reference, see [Configuration Guide](docs/unified_configuration.md).
 
 ## 🐳 Docker Deployment
 
-### Production-Ready Microservices
+### Microservices Deployment
 ```bash
-# Complete system deployment
+# Complete system deployment (config in docker-compose.yml)
 python init.py --mode production
 ./start.sh
 
 # Individual service management
-docker-compose up -d aggr-influx squeezeflow-redis    # Data infrastructure
+docker-compose up -d aggr-influx redis                # Data infrastructure
 docker-compose up -d aggr-server                      # Data collection
-docker-compose up -d squeezeflow-calculator           # Signal generation
-docker-compose up -d squeezeflow-freqtrade squeezeflow-freqtrade-ui  # Trading execution
-docker-compose up -d squeezeflow-monitor               # Monitoring
+docker-compose up -d strategy-runner                  # Signal generation
+docker-compose up -d freqtrade freqtrade-ui          # Trading execution
+docker-compose up -d health-monitor performance-monitor signal-monitor-dashboard  # Monitoring services
 
 # Service health monitoring
-docker-compose logs -f squeezeflow-calculator
+docker-compose logs -f strategy-runner
+docker-compose logs -f signal-monitor-dashboard
 docker stats
 ```
 
-### Service Architecture
-```yaml
-# 9 containerized microservices
-services:
-  aggr-influx:           # InfluxDB 1.8.10 - Time-series database
-  aggr-server:           # Node.js - Real-time data collection from 24+ exchanges
-  squeezeflow-redis:     # Redis 7-alpine - Caching and message queue
-  squeezeflow-calculator: # Core signal generation service
-  squeezeflow-freqtrade: # Trading engine with FreqAI integration
-  squeezeflow-freqtrade-ui: # Web interface for trading management
-  squeezeflow-oi-tracker: # Open Interest tracking service
-  squeezeflow-monitor:   # System health monitoring
-  aggr-chronograf:       # InfluxDB admin interface
+### Docker Services
+
+```mermaid
+graph LR
+    A[aggr-server] -->|trades| B[aggr-influx]
+    B -->|data| C[strategy-runner]
+    C -->|signals| D[redis]
+    D -->|signals| E[freqtrade]
+    C -->|metrics| F[health-monitor]
+    C -->|stats| G[performance-monitor]
+    D -->|live data| H[signal-monitor-dashboard]
+    B -->|admin| I[aggr-chronograf]
 ```
+
+Key services:
+- `aggr-influx` - Time-series database (InfluxDB 1.8)
+- `aggr-server` - Real-time market data collection
+- `redis` - Caching and message queue
+- `strategy-runner` - Signal generation engine
+- `freqtrade` - Trade execution
+- Monitoring services for health, performance, and signals
 
 ## 📊 Performance & Monitoring
 
 ### System Performance
-- **Signal Generation**: Sub-100ms processing latency
-- **Multi-timeframe Analysis**: 6 concurrent timeframe calculations
-- **Data Throughput**: Real-time processing of 24+ exchange feeds
-- **Memory Efficiency**: Optimized with pre-aggregated continuous queries
+- **Signal Generation**: Low-latency processing with efficient data pipeline
+- **Multi-timeframe Analysis**: Concurrent analysis across 6 timeframes (1m, 5m, 15m, 30m, 1h, 4h)
+- **Data Processing**: Real-time market data aggregation and analysis
+- **Memory Optimization**: Pre-aggregated data via InfluxDB continuous queries
+- **Service Monitoring**: Comprehensive health checks and performance metrics
 
-### Trading Performance Metrics
-```python
-# Portfolio performance tracking (from backtest engine)
-{
-    'total_trades': 42,
-    'winning_trades': 28,
-    'losing_trades': 14,
-    'win_rate': 66.7,              # Percentage
-    'total_return': 12.4,          # Portfolio return percentage
-    'max_drawdown': 8.2,           # Maximum drawdown percentage
-    'sharpe_ratio': 1.8,           # Risk-adjusted returns
-    'profit_factor': 2.1,          # Gross profit / gross loss
-    'avg_win': 245.30,             # Average winning trade
-    'avg_loss': -118.45,           # Average losing trade
-    'largest_win_pct': 3.2,        # Largest win as percentage
-    'largest_loss_pct': -2.1       # Largest loss as percentage
-}
-```
+### Advanced Monitoring Features
+- **Health Monitor Service**: HTTP endpoints on port 8090 for real-time health checks
+- **Performance Monitor**: Advanced metrics collection with alerting and bottleneck detection
+- **Signal Monitor Dashboard**: Real-time visual trading signal monitoring with live metrics and symbol activity
+- **Docker Health Checks**: Automatic service recovery with container restart policies
+- **Prometheus Metrics**: Industry-standard monitoring integration
+- **Redis Alerting**: Real-time notifications via Redis pub/sub channels
+- **Performance Dashboards**: Live metrics visualization and historical analysis
+
+### Performance Tracking
+The backtest engine provides comprehensive performance metrics including:
+- Trade statistics (win rate, profit factor)
+- Risk metrics (drawdown, Sharpe ratio)
+- Position analysis (average win/loss)
+- Portfolio evolution over time
+
+Metrics are generated in HTML reports with visualizations in `/backtest/results/`
 
 ### Monitoring & Visualization
 - **Backtest Plotting System**: Professional visualization via `/backtest/visualization/plotter.py`
-- **Health Checks**: Automated service monitoring with status endpoints
+- **Health Monitor Service**: HTTP health endpoints (`http://localhost:8090/health`)
+- **Performance Monitor**: Real-time metrics collection and alerting system
+- **Signal Monitor Dashboard**: Live trading signal visualization and metrics dashboard
+- **Docker Health Checks**: Automated service monitoring with container recovery
 - **Log Aggregation**: Centralized logging with rotation and retention
 - **Performance Metrics**: System resource usage and trading statistics
+- **Monitoring APIs**: RESTful endpoints for service health and performance data
 
 ## 🔐 Security & Risk Management
 
@@ -357,48 +487,136 @@ services:
 - **Container Security**: Isolated Docker services with minimal privileges
 
 ### Risk Controls
-```yaml
-# Risk management configuration (/config/risk_management.yaml)
-position_sizing:
-  max_position_size: 0.02        # 2% maximum per position
-  max_total_exposure: 0.1        # 10% total portfolio exposure
-  min_position_size: 0.001       # 0.1% minimum per position
+Risk management parameters are configured through the strategy configuration and FreqTrade settings. The system implements:
 
-risk_limits:
-  max_consecutive_losses: 5      # Maximum consecutive losses
-  max_daily_loss: 0.05          # 5% maximum daily loss
-  max_drawdown: 0.15            # 15% maximum drawdown
-
-stop_loss:
-  default_pct: 0.02             # 2% default stop loss
-  enabled: true                 # Stop loss enabled
-
-take_profit:
-  default_pct: 0.04             # 4% default take profit
-  enabled: false                # Take profit disabled (flow-following)
-```
+- **Position Sizing**: 2% maximum per position, 10% total exposure
+- **Risk Limits**: Maximum 5 consecutive losses, 5% daily loss limit
+- **Drawdown Control**: 15% maximum drawdown threshold
+- **Stop Loss**: 2% default (configurable per strategy)
+- **Exit Logic**: Flow-following without fixed targets
 
 ## 📚 Documentation
 
-### Comprehensive Documentation Structure
-```
-docs/
-└── strategy/
-    ├── SqueezeFlow.md                 # Complete trading methodology (478 lines)
-    └── SqueezeFlow_Changelog.md       # Version history and updates
-```
+The SqueezeFlow Trader system includes comprehensive documentation covering all aspects from user guides to deep technical specifications. Use this documentation roadmap to find the information you need.
 
-### Technical Resources
-- **[CLAUDE.md](CLAUDE.md)**: Complete system architecture and technical specifications
-- **[Strategy Documentation](docs/strategy/)**: Detailed trading methodology and implementation
-- **API Documentation**: Service-specific documentation in respective directories
-- **Test Documentation**: Comprehensive unit test suite with 100% coverage
+### 📖 Documentation Overview
 
-### Development Resources
-- **Modular Architecture**: Clean, testable component design
-- **Type Hints**: Full Python type annotation for better IDE support
-- **Code Quality**: Linting, formatting, and testing standards
-- **Docker Integration**: Development and production container support
+| Document | Purpose | When to Use |
+|----------|---------|-------------|
+| **[Configuration Guide](docs/unified_configuration.md)** | Environment variables reference | System configuration, deployment |
+| **[Getting Started](#-quick-start)** | System setup and basic usage | First-time setup, quick deployment |
+| **[Trading Strategy](docs/squeezeflow_strategy.md)** | Complete 5-phase methodology (478 lines) | Understanding the trading logic, strategy customization |
+| **[System Architecture](CLAUDE.md)** | Technical specifications and architecture | Development, system integration, troubleshooting |
+| **[Backtest Engine](docs/backtest_engine.md)** | Modular backtesting framework | Strategy development, historical analysis |
+| **[Services Architecture](docs/services_architecture.md)** | Microservices design and APIs | Service integration, monitoring setup |
+| **[Signal Generation Workflow](docs/signal_generation_workflow.md)** | Complete signal pipeline documentation | Understanding data flow, debugging signals |
+| **[CVD Baseline Tracking](docs/cvd_baseline_tracking.md)** | CVD calculation and baseline methodologies | CVD analysis, market data validation |
+| **[Docker Services](docs/docker_services.md)** | Container deployment and configuration | Production deployment, service management |
+
+### 🎯 Quick Navigation
+
+#### For New Users
+- **Start Here**: [Quick Start Guide](#-quick-start) → [System Architecture](#-system-architecture) → [Trading Strategy](docs/squeezeflow_strategy.md)
+- **Deployment**: [Docker Services](docs/docker_services.md) → [Troubleshooting](#-troubleshooting)
+
+#### For Traders
+- **Strategy Understanding**: [SqueezeFlow Strategy](docs/squeezeflow_strategy.md) → [CVD Methodology](docs/cvd_baseline_tracking.md)
+- **Backtesting**: [Backtest Engine](docs/backtest_engine.md) → [Performance Analysis](#-testing--validation)
+
+#### For Developers
+- **System Architecture**: [CLAUDE.md](CLAUDE.md) → [Services Architecture](docs/services_architecture.md)
+- **Signal Pipeline**: [Signal Generation Workflow](docs/signal_generation_workflow.md) → [API Integration](docs/services_architecture.md)
+- **Customization**: [Backtest Engine](docs/backtest_engine.md) → [Strategy Components](docs/squeezeflow_strategy.md)
+
+#### For DevOps
+- **Deployment**: [Docker Services](docs/docker_services.md) → [Production Setup](#-production-deployment)
+- **Monitoring**: [Services Architecture](docs/services_architecture.md) → [System Health](#system-health-monitoring)
+
+### 📋 Documentation Categories
+
+#### 🚀 **User Documentation**
+Essential guides for getting started and daily usage:
+
+- **[Configuration Guide](docs/unified_configuration.md)**: Complete environment variables reference
+- **[Quick Start Guide](#-quick-start)**: Complete setup from zero to running system
+- **[Trading Strategy Overview](docs/squeezeflow_strategy.md)**: Understanding the SqueezeFlow methodology
+- **[Troubleshooting Guide](#-troubleshooting)**: Common issues and solutions
+
+#### 🏗️ **Technical Documentation**
+Deep technical specifications for developers and system administrators:
+
+- **[System Architecture (CLAUDE.md)](CLAUDE.md)**: Complete technical reference (500+ lines)
+- **[Services Architecture](docs/services_architecture.md)**: Microservices design and communication
+- **[Signal Generation Workflow](docs/signal_generation_workflow.md)**: End-to-end signal processing pipeline
+- **[CVD Baseline Tracking](docs/cvd_baseline_tracking.md)**: Mathematical foundations and calculation methods
+
+#### 🧪 **Developer Documentation**
+Resources for development, testing, and customization:
+
+- **[Backtest Engine](docs/backtest_engine.md)**: Modular backtesting framework architecture
+- **[Docker Services](docs/docker_services.md)**: Container orchestration and deployment
+- **[API Reference](docs/services_architecture.md#api-endpoints)**: Service APIs and integration points
+- **[Testing Framework](#-testing--validation)**: Unit testing and validation procedures
+
+#### 📊 **Operations Documentation**
+Guides for deployment, monitoring, and maintenance:
+
+- **[Production Deployment](#-production-deployment)**: Live system deployment procedures
+- **[Performance Monitoring](#-performance--monitoring)**: System health and performance tracking
+- **[Security Configuration](#-security--risk-management)**: Security settings and risk controls
+- **[Backup & Recovery](CLAUDE.md#deployment-and-lifecycle)**: Data protection and disaster recovery
+
+### 🔍 **Documentation by Use Case**
+
+<details>
+<summary><strong>🎯 "I want to understand the trading strategy"</strong></summary>
+
+1. **[SqueezeFlow Strategy](docs/squeezeflow_strategy.md)** - Complete 5-phase methodology
+2. **[CVD Baseline Tracking](docs/cvd_baseline_tracking.md)** - Mathematical foundations
+3. **[Signal Generation Workflow](docs/signal_generation_workflow.md)** - How signals are created
+4. **[Backtest Engine](docs/backtest_engine.md)** - Strategy testing framework
+
+</details>
+
+<details>
+<summary><strong>🛠️ "I want to deploy the system"</strong></summary>
+
+1. **[Quick Start Guide](#-quick-start)** - Basic setup steps
+2. **[Docker Services](docs/docker_services.md)** - Container deployment
+3. **[Production Deployment](#-production-deployment)** - Live system setup
+4. **[Troubleshooting](#-troubleshooting)** - Common deployment issues
+
+</details>
+
+<details>
+<summary><strong>⚙️ "I want to customize or develop"</strong></summary>
+
+1. **[System Architecture (CLAUDE.md)](CLAUDE.md)** - Complete technical reference
+2. **[Services Architecture](docs/services_architecture.md)** - Service design and APIs
+3. **[Backtest Engine](docs/backtest_engine.md)** - Development framework
+4. **[Signal Generation Workflow](docs/signal_generation_workflow.md)** - Data processing pipeline
+
+</details>
+
+<details>
+<summary><strong>📈 "I want to monitor and optimize"</strong></summary>
+
+1. **[Performance Monitoring](#-performance--monitoring)** - System metrics
+2. **[Services Architecture](docs/services_architecture.md)** - Service health monitoring
+3. **[System Health Checks](#system-health-monitoring)** - Automated monitoring
+4. **[Troubleshooting Guide](#-troubleshooting)** - Performance optimization
+
+</details>
+
+### 📝 **Documentation Standards**
+
+All documentation follows professional standards:
+- **Comprehensive Examples**: Working code snippets and configuration samples
+- **Clear Navigation**: Table of contents and cross-references
+- **Up-to-Date**: Synchronized with latest system changes
+- **Multi-Level Detail**: Overview → Details → Implementation
+- **Real-World Focus**: Based on production system experience
+
 
 ## ⚠️ Risk Disclaimer
 
@@ -413,7 +631,7 @@ docs/
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
 
 ---
 
@@ -421,19 +639,115 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **SqueezeFlow Trader** represents institutional-grade trading infrastructure with significant architectural improvements:
 
-### **Major System Enhancements:**
-- **🏗️ Modular Backtest Engine**: Complete architectural redesign with industry-standard Python packaging
-- **📊 Multi-Timeframe Data**: Automated InfluxDB continuous queries for 6 timeframes (1m-4h)
-- **🧪 Comprehensive Testing**: 42 unit tests with 100% pass rate and real API validation
-- **📈 Advanced Strategy Logic**: 5-phase methodology with dynamic threshold scaling
-- **🔍 Professional Monitoring**: Multi-channel logging with CSV analysis and timestamped outputs
-- **⚙️ Configuration Management**: Hierarchical YAML configuration with environment-specific settings
-- **🐳 Production Deployment**: 9-service Docker architecture with health monitoring
+### Key System Features:
+- **Backtest Engine**: Strategy testing and performance analysis
+- **Multi-Timeframe Data**: InfluxDB continuous queries for 6 timeframes
+- **5-Phase Strategy**: Advanced trading methodology with dynamic adaptation
+- **Professional Monitoring**: Comprehensive logging and health checks
+- **Unified Configuration**: All settings via docker-compose.yml environment variables
+- **Docker Architecture**: Microservice-based deployment with monitoring
 
-### **Data Infrastructure:**
-- **Real-time Processing**: 24+ exchange aggregation with sub-100ms latency
-- **Storage Optimization**: 30-day rolling retention with efficient continuous query aggregation
-- **Market Coverage**: BTC/ETH pairs with expandable multi-exchange support
-- **Quality Assurance**: Data validation, coverage analysis, and reliability monitoring
+### Data Infrastructure:
+- **Real-time Processing**: Multi-exchange aggregation via aggr-server
+- **Storage Optimization**: Efficient time-series storage with InfluxDB
+- **Market Coverage**: Support for any cryptocurrency pair
+- **Quality Assurance**: Data validation and reliability monitoring
 
-**Repository**: https://github.com/your-username/SqueezeFlow-Trader
+## 🛠️ Production Deployment
+
+### Quick Production Setup
+```bash
+# 1. System initialization (config in docker-compose.yml)
+python init.py --mode production
+python validate_setup.py
+
+# 2. Start all services
+./start.sh
+
+# 3. Verify system health  
+python status.py
+
+# 4. Monitor performance
+docker stats
+tail -f data/logs/squeezeflow.log
+```
+
+### System Health Monitoring
+```bash
+# Service status (all should show "Up")
+docker-compose ps
+
+# Check service configuration
+docker exec squeezeflow-strategy-runner env | grep -E "SQUEEZEFLOW|REDIS|INFLUX|FREQTRADE"
+
+# Health Monitor endpoints
+curl http://localhost:8090/health              # Basic health check
+curl http://localhost:8090/health/detailed     # Comprehensive health report
+curl http://localhost:8090/metrics             # Prometheus-style metrics
+
+# Performance metrics
+python status.py
+
+# Signal flow validation
+redis-cli KEYS "squeeze_signal:*"
+redis-cli KEYS "squeezeflow:metrics:*"         # Performance metrics
+redis-cli KEYS "squeezeflow:alerts"            # Active alerts
+
+# Signal Monitor Dashboard
+docker attach squeezeflow-signal-dashboard     # View live signal dashboard
+docker-compose logs -f signal-monitor-dashboard # Dashboard logs
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues and Solutions
+
+#### Service startup issues
+```bash
+# Clean restart
+docker-compose down --volumes
+docker system prune -f
+docker-compose build --no-cache  # Rebuild with new config
+docker-compose up -d
+```
+
+#### InfluxDB connectivity
+```bash
+# Check database health
+docker logs aggr-influx
+curl http://localhost:8086/ping
+docker exec aggr-influx influx -execute "SHOW DATABASES"
+```
+
+#### Signal generation problems
+```bash
+# Validate strategy runner
+docker logs strategy-runner
+python services/test_enhanced_signals.py
+
+# Monitor live signals
+docker attach squeezeflow-signal-dashboard
+
+# Check data flow
+docker logs aggr-server
+python data/loaders/symbol_discovery.py
+```
+
+#### Configuration changes not taking effect
+```bash
+# After modifying docker-compose.yml environment variables:
+docker-compose build strategy-runner
+docker-compose restart strategy-runner
+
+# Verify new configuration
+docker exec squeezeflow-strategy-runner env | grep -E "SQUEEZEFLOW|REDIS|INFLUX|FREQTRADE"
+```
+
+### Performance Optimization
+- **InfluxDB**: Ensure all continuous queries are running
+- **Redis**: Monitor memory usage and connection count  
+- **Strategy Runner**: Check processing time per symbol
+- **FreqTrade**: Validate API connectivity and signal consumption
+
+For additional troubleshooting, see [CLAUDE.md](CLAUDE.md).
+

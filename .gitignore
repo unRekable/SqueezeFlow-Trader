@@ -1,21 +1,109 @@
-# SqueezeFlow Trader - Git Ignore Configuration
+# SqueezeFlow Trader - Comprehensive .gitignore
 
-# ==============================================
-# SYSTEM AND ENVIRONMENT FILES
-# ==============================================
+# =============================================================================
+# SECURITY & CREDENTIALS - NEVER COMMIT THESE
+# =============================================================================
 
-# Environment Variables (API Keys, Credentials)
+# API Keys and Secrets
 .env
-.env.local
-.env.production
-.env.development
-*.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+api_keys.txt
+secrets.yaml
+credentials.json
 
-# Python Environment
+# Exchange API configurations  
+exchange_config.json
+trading_keys.yaml
+*_api_key*
+*_secret*
+*_passphrase*
+
+# FreqTrade sensitive configs
+freqtrade/user_data/config_live.json
+freqtrade/user_data/config_prod.json
+freqtrade/user_data/strategies/*_live.py
+freqtrade/user_data/strategies/*_prod.py
+
+# =============================================================================
+# DATA & DATABASES - LARGE FILES NOT SUITABLE FOR GIT
+# =============================================================================
+
+# InfluxDB data directories
+influxdb-data/
+influxdb-data-backup/
+data/influxdb/
+aggr-server/data/influxdb/
+
+# Redis data & persistence files
+dump.rdb
+*.rdb
+redis-data/
+data/redis/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# CSV data files
+data/csv/
+*.csv
+data/exports/
+data/imports/
+
+# Large JSON data dumps
+data/json/
+*_dump.json
+*_export.json
+market_data_*.json
+
+# =============================================================================
+# LOGS & TEMPORARY FILES
+# =============================================================================
+
+# Log files
+logs/
+*.log
+*.log.*
+data/logs/
+freqtrade/user_data/logs/
+services/logs/
+aggr-server/logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+.tmp/
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# =============================================================================
+# PYTHON SPECIFIC
+# =============================================================================
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -29,266 +117,348 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# Virtual Environments
-.venv/
-venv/
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+.env
+.venv
 env/
+venv/
 ENV/
 env.bak/
 venv.bak/
+.python-version
 
-# ==============================================
-# ARCHIVED AND BACKUP FILES
-# ==============================================
+# =============================================================================
+# NODE.JS / AGGR-SERVER SPECIFIC
+# =============================================================================
 
-# Archived Directory (old files and backups)
-Archived/
-archived/
-backup/
-backups/
-*.backup
-*.bak
-*.old
-
-# Temporary Files
-*.tmp
-*.temp
-*~
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# ==============================================
-# DATA AND DATABASES
-# ==============================================
-
-# InfluxDB Data
-data/influxdb/
-aggr-server/data/influxdb/
-
-# Grafana Data
-data/grafana/
-config/grafana/provisioning/dashboards/*.json
-
-# Redis Data
-data/redis/
-*.rdb
-
-# SQLite Databases
-*.sqlite
-*.sqlite3
-*.db
-
-# FreqTrade Data
-freqtrade/user_data/data/
-freqtrade/user_data/backtest_results/
-freqtrade/user_data/hyperopt_results/
-freqtrade/user_data/models/
-freqtrade/user_data/plot/
-*.feather
-
-# ==============================================
-# LOGS AND MONITORING
-# ==============================================
-
-# Log Files
-logs/
-data/logs/
-freqtrade/user_data/logs/
-*.log
-*.log.*
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
-
-# ==============================================
-# MACHINE LEARNING AND MODELS
-# ==============================================
-
-# ML Models and Training Data
-models/
-*.pkl
-*.joblib
-*.h5
-*.model
-*.onnx
-
-# Training Results
-state/
-backtest_results_*.json
-
-# ==============================================
-# DOCKER AND CONTAINERS
-# ==============================================
-
-# Docker Volumes
-docker-data/
-docker/data/
-
-# Container Logs
-**/logs/
-
-# ==============================================
-# DEVELOPMENT AND IDE
-# ==============================================
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# PyCharm
-.idea/
-
-# Jupyter
-.jupyter/
-
-# ==============================================
-# NODE.JS (aggr-server)
-# ==============================================
-
-# Node Dependencies
+# Dependencies
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Node Build
-aggr-server/dist/
-aggr-server/build/
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
 
-# ==============================================
-# SYSTEM SPECIFIC
-# ==============================================
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
+# nyc test coverage
+.nyc_output
 
-# Windows
-Thumbs.db
-ehthumbs.db
-Desktop.ini
+# Grunt intermediate storage
+.grunt
 
-# Linux
+# Bower dependency directory
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons
+build/Release
+
+# Dependency directories
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variable files
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# =============================================================================
+# DOCKER & CONTAINERIZATION
+# =============================================================================
+
+# Docker volumes and data
+docker-data/
+volumes/
+.dockerignore_backup
+
+# Docker override files (these contain local environment specifics)
+docker-compose.override.yml
+docker-compose.prod.yml
+docker-compose.local.yml
+
+# =============================================================================
+# IDE & EDITOR FILES
+# =============================================================================
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Atom
+.atom/
+
+# Vim
+*.swp
+*.swo
 *~
 
-# ==============================================
-# SECURITY AND CREDENTIALS
-# ==============================================
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
 
-# API Keys and Secrets
-**/api_keys.json
-**/credentials.json
-**/secrets.yaml
-**/private_key*
-**/certificate*
+# =============================================================================
+# TRADING SPECIFIC DATA
+# =============================================================================
 
-# SSL Certificates
-*.pem
-*.key
-*.crt
-*.cert
+# Backtest results
+backtest_results/
+data/backtests/
+*.html
+*_backtest.png
+backtest_*.json
 
-# ==============================================
-# PERFORMANCE AND MONITORING
-# ==============================================
+# Strategy performance data
+performance_data/
+strategy_results/
+optimization_results/
 
-# Performance Data
-*.prof
-*.trace
+# Position and trade history
+positions/
+trades/
+trade_history.json
+position_history.json
 
-# Coverage Reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
+# Market data cache
+market_cache/
+*.cache
+data/cache/
 
-# ==============================================
-# DOCUMENTATION BUILDS
-# ==============================================
+# Signal data storage
+signals/
+signal_history/
+*_signals.json
 
-# Sphinx Documentation
+# ML model files (if any)
+models/
+*.pkl
+*.joblib
+*.h5
+*.onnx
+
+# =============================================================================
+# CONFIGURATION OVERRIDES
+# =============================================================================
+
+# Local configuration overrides
+config/local.yaml
+config/*_local.yaml
+config/*_override.yaml
+services/config/*_local.yaml
+
+# Environment-specific configs
+config/development.yaml
+config/production.yaml
+config/staging.yaml
+
+# =============================================================================
+# DOCUMENTATION & REPORTS
+# =============================================================================
+
+# Generated documentation
 docs/_build/
+docs/build/
+site/
 
-# ==============================================
-# PACKAGE MANAGERS
-# ==============================================
+# Generated reports
+reports/
+analysis/
+*.pdf
+*.docx
 
-# Pip
-pip-log.txt
-pip-delete-this-directory.txt
+# =============================================================================
+# TESTING & DEBUGGING
+# =============================================================================
 
-# Pipenv
-Pipfile.lock
+# Test data
+test_data/
+tests/data/
+*_test_data.json
 
-# Poetry
-poetry.lock
+# Debug files
+debug/
+debug_*.log
+debug_*.json
 
-# ==============================================
+# Profiling data
+*.prof
+*.profile
+
+# =============================================================================
+# SYSTEM & PROCESS FILES
+# =============================================================================
+
+# Process IDs
+*.pid
+
+# Lock files
+*.lock
+
+# Sockets
+*.sock
+
+# =============================================================================
+# BACKUP FILES
+# =============================================================================
+
+# Backup files
+*.bak
+*.backup
+*_backup
+*.orig
+*.old
+
+# =============================================================================
 # FREQTRADE SPECIFIC
-# ==============================================
+# =============================================================================
 
-# FreqTrade Specific Ignores
-freqtrade/user_data/tradesv3.sqlite*
-freqtrade/user_data/dry_run_db/
-freqtrade/user_data/*.sqlite-*
+# FreqTrade generated files
+freqtrade/user_data/backtest_results/
+freqtrade/user_data/plot/
+freqtrade/user_data/data/
+freqtrade/user_data/notebooks/
+freqtrade/user_data/strategies/__pycache__/
 
-# ==============================================
-# CUSTOM TRADING DATA
-# ==============================================
+# FreqAI generated files  
+freqtrade/user_data/models/
+freqtrade/user_data/freqai_data/
 
-# Large Data Files
-*.csv.gz
-*.parquet
-large_data/
+# =============================================================================
+# PROJECT SPECIFIC EXCLUSIONS
+# =============================================================================
 
-# Trading Results
-trading_results/
-performance_reports/
+# SqueezeFlow specific generated files
+data/session_summaries/
+data/session_stats/
+*_performance_results.json
+*_analysis_results.json
+*_optimization.json
 
-# ==============================================
-# AI AGENTS AND DEVELOPMENT TOOLS
-# ==============================================
+# Strategy runner generated data  
+strategy_runner_data/
+signal_validation_cache/
 
-# AI Agent Sessions and Temporary Files
-agents/
-.agents/
-*.agent
-agent_logs/
+# Service monitoring data
+monitoring_data/
+health_check_logs/
 
-# Backtest Results and Temporary Output
-backtest/results/
+# Large test files
+*_large_test.py
+test_with_real_data.py
+performance_test_*.py
 
-# ==============================================
-# TESTING
-# ==============================================
+# =============================================================================
+# KEEP THESE FILES (OVERRIDE ABOVE PATTERNS)
+# =============================================================================
 
-# Test Results
-.tox/
-.nox/
-.coverage
-.pytest_cache/
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Always keep these important files even if they match above patterns
+!.gitignore
+!.gitkeep
+!README.md
+!requirements.txt
+!docker-compose.yml
+!Dockerfile
+!*/Dockerfile*
+!config/config.yaml
+!freqtrade/config/config.json
+!freqtrade/user_data/config.json
 
-# ==============================================
+# Keep sample/template files
+!*_sample.*
+!*_template.*
+!*_example.*
+
+# Keep essential strategy files
+!freqtrade/user_data/strategies/SqueezeFlowFreqAI.py
+!strategies/**/*.py
+
+# Keep documentation
+!docs/**/*.md
+!*.md
+
+# =============================================================================
 # END OF GITIGNORE
-# ==============================================
+# ==============================================================================

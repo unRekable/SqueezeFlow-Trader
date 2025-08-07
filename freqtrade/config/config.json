@@ -4,7 +4,7 @@
     "stake_amount": "unlimited",
     "tradable_balance_ratio": 0.99,
     "fiat_display_currency": "USD",
-    "timeframe": "15m",
+    "timeframe": "5m",
     "dry_run": true,
     "trading_mode": "futures",
     "margin_mode": "isolated",
@@ -98,8 +98,8 @@
         "enable_openapi": false,
         "jwt_secret_key": "squeezeflow_jwt_secret_key_2025",
         "CORS_origins": [],
-        "username": "squeezeflow",
-        "password": "squeezeflow123"
+        "username": "0xGang",
+        "password": "0xGang"
     },
     "bot_name": "SqueezeFlow_FreqAI",
     "initial_state": "running",
@@ -109,11 +109,11 @@
     },
     "strategy": "SqueezeFlowFreqAI",
     "strategy_path": "user_data/strategies",
-    "freqaimodel": "LightGBMRegressorMultiTarget",
+    "freqaimodel": "",
     "db_url": "sqlite:///user_data/tradesv3.sqlite",
     "redis_url": "redis://redis:6379/0",
     "freqai": {
-        "enabled": true,
+        "enabled": false,
         "purge_old_models": 2,
         "train_period_days": 3,
         "backtest_period_days": 1,
@@ -124,7 +124,7 @@
         "data_kitchen_thread_count": 2,
         "activate_tensorboard": false,
         "feature_parameters": {
-            "include_timeframes": ["15m", "1h"],
+            "include_timeframes": ["5m", "1h"],
             "include_corr_pairlist": [],
             "label_period_candles": 10,
             "include_shifted_candles": 1,

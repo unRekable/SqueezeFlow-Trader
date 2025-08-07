@@ -58,7 +58,7 @@ def get_date_range_suggestions():
     }
 
 
-async def run_quick_backtest(period_key: str = "last_week", balance: float = 10000, strategy: str = "production_enhanced_strategy"):
+async def run_quick_backtest(period_key: str = "last_week", balance: float = 10000, strategy: str = "production_enhanced_strategy", leverage: float = 1.0):
     """Run a quick backtest with predefined periods using the modular engine"""
     
     periods = get_date_range_suggestions()
@@ -72,6 +72,7 @@ async def run_quick_backtest(period_key: str = "last_week", balance: float = 100
     print(f"🚀 Running Enhanced SqueezeFlow Backtest: {period['description']}")
     print(f"📅 Period: {period['start']} to {period['end']}")
     print(f"💰 Initial Balance: ${balance:,.2f}")
+    print(f"📈 Leverage: {leverage}x")
     print(f"⚙️ Strategy: {strategy}")
     print(f"{'='*60}")
     
@@ -86,6 +87,7 @@ async def run_quick_backtest(period_key: str = "last_week", balance: float = 100
             '--start-date', period['start'],
             '--end-date', period['end'],
             '--balance', str(balance),
+            '--leverage', str(leverage),
             '--strategy', strategy
         ]
         
@@ -194,7 +196,7 @@ async def main():
     
     if len(sys.argv) < 2:
         print("📖 USAGE:")
-        print("  python run_backtest.py <period> [balance] [strategy]")
+        print("  python run_backtest.py <period> [balance] [strategy] [leverage]")
         print()
         print("📅 AVAILABLE PERIODS:")
         
@@ -216,15 +218,17 @@ async def main():
         print("   python run_backtest.py last_month 20000")
         print("   python run_backtest.py january_2025 50000")
         print("   python run_backtest.py last_week 15000 production_enhanced_strategy")
+        print("   python run_backtest.py last_week 10000 production_enhanced_strategy 2.0  # 2x leverage")
         
         return
         
     period_key = sys.argv[1]
     balance = float(sys.argv[2]) if len(sys.argv) > 2 else 10000
     strategy = sys.argv[3] if len(sys.argv) > 3 else "production_enhanced_strategy"
+    leverage = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
     
     # Run backtest
-    await run_quick_backtest(period_key, balance, strategy)
+    await run_quick_backtest(period_key, balance, strategy, leverage)
 
 
 if __name__ == "__main__":

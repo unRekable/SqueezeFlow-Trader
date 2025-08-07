@@ -2,28 +2,42 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Set Python path for module imports
+ENV PYTHONPATH=/app
+
+# Install system dependencies including Docker CLI
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    curl \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (comprehensive for strategy runner)
 COPY data/ /app/data/
 COPY utils/ /app/utils/
 COPY indicators/ /app/indicators/
 COPY services/ /app/services/
+COPY strategies/ /app/strategies/
 
-# State machine files removed
+# Create service launcher script
+RUN echo '#!/bin/bash\ncd /app\nexport PYTHONPATH=/app\n\n# Determine which service to run based on SERVICE_MODE\nSERVICE_MODE=${SERVICE_MODE:-calculator}\n\ncase "$SERVICE_MODE" in\n  "calculator")\n    echo "Starting SqueezeFlow Calculator Service..."\n    python services/squeezeflow_calculator.py\n    ;;\n  "strategy_runner")\n    echo "Starting Strategy Runner Service..."\n    echo "First running import test..."\n    python services/test_imports.py\n    echo "Now starting actual service..."\n    python services/strategy_runner.py\n    ;;\n  "test")\n    echo "Running import test..."\n    python services/test_imports.py\n    ;;\n  *)\n    echo "Unknown service mode: $SERVICE_MODE"\n    echo "Available modes: calculator, strategy_runner, test"\n    exit 1\n    ;;\nesac' > /app/entrypoint.sh
 
-# Create entrypoint
-COPY services/squeezeflow_calculator.py /app/squeezeflow_calculator.py
-RUN echo '#!/bin/bash\ncd /app && python squeezeflow_calculator.py' > /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import redis; r=redis.Redis(host='${REDIS_HOST:-redis}', port=${REDIS_PORT:-6379}); r.ping()" || exit 1
 
 EXPOSE 8001
 

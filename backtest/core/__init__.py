@@ -1,19 +1,15 @@
 """
-Core Backtest Components
-Essential functionality for backtesting trading strategies
+Core backtest components.
 
-Components:
-- portfolio: Portfolio and risk management
-- fees: Trading cost calculations
-- strategy: Base strategy interface and utilities
+This module contains the fundamental building blocks for the backtest engine:
+- Strategy: Base strategy interface and implementations
+- Portfolio: Portfolio management and position tracking
 """
 
-from .portfolio import PortfolioManager, Position, PositionType, RiskLimits
-from .fees import FeeCalculator, TradingCosts
-from .strategy import BaseStrategy, TradingSignal, SignalStrength, load_strategy
+# Strategies are now in the /strategies/ folder - import from there if needed
+from .portfolio import Portfolio, Position
 
 __all__ = [
-    "PortfolioManager", "Position", "PositionType", "RiskLimits",
-    "FeeCalculator", "TradingCosts",
-    "BaseStrategy", "TradingSignal", "SignalStrength", "load_strategy"
+    'Portfolio',
+    'Position'
 ]

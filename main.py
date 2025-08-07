@@ -48,19 +48,24 @@ async def start_squeezeflow_calculator(dry_run: bool = True):
         print("💻 Running in local environment")
     
     try:
-        from services.squeezeflow_calculator import SqueezeFlowCalculatorService
+        # Note: SqueezeFlow Calculator service has been integrated into strategy_runner.py
+        from services.strategy_runner import StrategyRunner
+        from services.config.service_config import ConfigManager
         
-        # Create and start the calculator service
-        calculator_service = SqueezeFlowCalculatorService()
+        # Create and start the strategy runner service
+        config_manager = ConfigManager()
+        config = config_manager.load_config()
         
-        print("⚙️  SqueezeFlow Calculator service initialized")
+        strategy_runner = StrategyRunner(config)
+        
+        print("⚙️  Strategy Runner service initialized")
         print("🔍 Starting CVD-based squeeze detection...")
         print("📊 Monitoring multi-exchange volume flow")
         print("🔄 State machine mode detection enabled")
         print("🎯 Dynamic position sizing active")
         print("⏹️  Press Ctrl+C to stop")
         
-        await calculator_service.run()
+        await strategy_runner.run()
         
     except KeyboardInterrupt:
         print("\n🛑 Shutting down SqueezeFlow Calculator...")

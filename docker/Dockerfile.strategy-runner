@@ -1,0 +1,40 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Set Python path for module imports
+ENV PYTHONPATH=/app
+
+# Install system dependencies including timezone data
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    redis-tools \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code in correct order
+COPY strategies/ /app/strategies/
+COPY data/ /app/data/
+COPY services/ /app/services/
+COPY utils/ /app/utils/
+
+# Create strategies __init__.py if missing
+RUN touch /app/strategies/__init__.py
+
+# Create a dedicated strategy runner entrypoint
+COPY docker/entrypoint-strategy-runner.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Health check for strategy runner
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import redis; r=redis.Redis(host='${REDIS_HOST:-redis}', port=${REDIS_PORT:-6379}); r.ping()" || exit 1
+
+EXPOSE 8001
+
+CMD ["/app/entrypoint.sh"]

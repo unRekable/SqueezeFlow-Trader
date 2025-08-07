@@ -1,0 +1,155 @@
+# Docker Compose for SqueezeFlow Trader Testing Environment
+# Provides isolated testing environment with all required services
+
+version: '3.8'
+
+services:
+  # Redis for testing (separate from production)
+  redis-test:
+    image: redis:7-alpine
+    container_name: squeezeflow-redis-test
+    ports:
+      - "6380:6379"  # Different port to avoid conflicts
+    command: redis-server --appendonly no --save ""  # No persistence for tests
+    networks:
+      - test_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # InfluxDB for testing (separate from production)
+  influxdb-test:
+    image: influxdb:1.8.10
+    container_name: squeezeflow-influxdb-test
+    ports:
+      - "8087:8086"  # Different port to avoid conflicts
+    environment:
+      INFLUXDB_DB: test_squeezeflow
+      INFLUXDB_ADMIN_USER: admin
+      INFLUXDB_ADMIN_PASSWORD: testpass
+      INFLUXDB_USER: testuser
+      INFLUXDB_USER_PASSWORD: testpass
+      INFLUXDB_HTTP_AUTH_ENABLED: false
+    volumes:
+      - influxdb_test_data:/var/lib/influxdb
+    networks:
+      - test_network
+    healthcheck:
+      test: ["CMD", "influx", "-execute", "SHOW DATABASES"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # Test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: squeezeflow-test-runner
+    depends_on:
+      redis-test:
+        condition: service_healthy
+      influxdb-test:
+        condition: service_healthy
+    environment:
+      # Test configuration
+      SQUEEZEFLOW_TEST_MODE: "true"
+      SQUEEZEFLOW_LOG_LEVEL: "DEBUG"
+      DOCKER_ENV: "true"
+      
+      # Service connections (test instances)
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      
+      INFLUX_HOST: influxdb-test
+      INFLUX_PORT: 8086
+      INFLUX_DATABASE: test_squeezeflow
+      INFLUX_USERNAME: testuser
+      INFLUX_PASSWORD: testpass
+      
+      # Test-specific settings
+      SQUEEZEFLOW_RUN_INTERVAL: 5
+      SQUEEZEFLOW_MAX_SYMBOLS: 2
+      SQUEEZEFLOW_LOOKBACK_HOURS: 1
+      SQUEEZEFLOW_ENABLE_BATCH: "true"
+      SQUEEZEFLOW_MAX_BATCH_SIZE: 3
+      SQUEEZEFLOW_BATCH_TIMEOUT: 2
+      
+    volumes:
+      - .:/app
+      - test_results:/app/data/test_results
+      - test_logs:/app/data/logs
+    working_dir: /app
+    networks:
+      - test_network
+    command: >
+      sh -c "
+        echo 'Waiting for services to be ready...' &&
+        sleep 10 &&
+        echo 'Running integration tests...' &&
+        python tests/run_integration_tests.py --verbose --coverage --parallel
+      "
+
+  # Health monitor for testing
+  health-monitor-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: squeezeflow-health-monitor-test
+    depends_on:
+      redis-test:
+        condition: service_healthy
+      influxdb-test:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis-test
+      INFLUX_HOST: influxdb-test
+      SQUEEZEFLOW_TEST_MODE: "true"
+      SQUEEZEFLOW_LOG_LEVEL: "INFO"
+    ports:
+      - "8081:8080"  # Health monitor HTTP endpoint
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - test_network
+    command: python services/health_monitor.py
+
+  # Performance monitor for testing
+  performance-monitor-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: squeezeflow-performance-monitor-test
+    depends_on:
+      redis-test:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis-test
+      SQUEEZEFLOW_TEST_MODE: "true"
+      SQUEEZEFLOW_LOG_LEVEL: "INFO"
+    volumes:
+      - .:/app
+      - test_charts:/app/data/charts
+    working_dir: /app
+    networks:
+      - test_network
+    command: python services/performance_monitor.py
+
+networks:
+  test_network:
+    driver: bridge
+    name: squeezeflow_test_network
+
+volumes:
+  influxdb_test_data:
+    name: squeezeflow_influxdb_test_data
+  test_results:
+    name: squeezeflow_test_results
+  test_logs:
+    name: squeezeflow_test_logs  
+  test_charts:
+    name: squeezeflow_test_charts

@@ -15,11 +15,49 @@ import json
 import time
 # import psycopg2  # Migrated to InfluxDB
 # from psycopg2.extras import execute_batch
-from data.storage.influxdb_handler import InfluxDBHandler
 import redis
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Handle InfluxDBHandler import with fallback
+try:
+    from data.storage.influxdb_handler import InfluxDBHandler
+except ImportError:
+    # Fallback implementation for Docker environment
+    from influxdb import InfluxDBClient
+    class InfluxDBHandler:
+        def __init__(self, host='localhost', port=8086, username='', password='', database='significant_trades'):
+            self.client = InfluxDBClient(host=host, port=port, username=username, password=password, database=database)
+            self.database = database
+        
+        def test_connection(self):
+            """Test InfluxDB connection"""
+            try:
+                self.client.ping()
+                return True
+            except Exception as e:
+                print(f"InfluxDB connection test failed: {e}")
+                return False
+        
+        def write_trading_data(self, measurement: str, points: List[Dict]):
+            """Write trading data points to InfluxDB"""
+            try:
+                # Convert points to InfluxDB format
+                influx_points = []
+                for point in points:
+                    influx_point = {
+                        'measurement': measurement,
+                        'tags': point.get('tags', {}),
+                        'fields': point.get('fields', {}),
+                        'time': point.get('timestamp', datetime.now(timezone.utc))
+                    }
+                    influx_points.append(influx_point)
+                
+                return self.client.write_points(influx_points)
+            except Exception as e:
+                print(f"InfluxDB write error: {e}")
+                return False
 
 class OITracker:
     def __init__(self, influx_handler: InfluxDBHandler = None):

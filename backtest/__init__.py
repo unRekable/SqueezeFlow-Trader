@@ -1,37 +1,35 @@
+#!/usr/bin/env python3
 """
-SqueezeFlow Backtest Package
-Industrial-standard backtesting framework for cryptocurrency trading strategies
+SqueezeFlow Backtest Engine - Clean Modular Architecture
+
+This package provides a clean, professional backtest engine with complete
+separation between strategy logic and execution orchestration.
 
 Architecture:
-- core/: Core functionality (portfolio, fees, strategy interfaces)
-- visualization/: Plotting and visualization systems
-- strategy_logging/: Comprehensive logging framework
-- analysis/: CVD and market analysis tools
-- strategies/: Trading strategy implementations
-- results/: All generated outputs (images, logs, debug files)
-- tests/: Unit tests for all components
+- engine.py: Pure orchestration - loads data and executes orders
+- core/: Core trading components (strategy, portfolio)
+- reporting/: Reporting and visualization components
 
-Main Entry Point: engine.py
+Key Principles:
+- Strategy has COMPLETE authority over all calculations and trading decisions
+- Engine ONLY orchestrates - loads data and executes orders
+- Clean separation ensures same strategy works in backtest AND live trading
+- Professional logging, visualization, and reporting
 """
 
+from .engine import BacktestEngine
+from .core import Portfolio, Position
+from .reporting import BacktestLogger, BacktestVisualizer, HTMLReporter, PNGPlotter
+
 __version__ = "2.0.0"
-__author__ = "SqueezeFlow Trading System"
-
-# Import main components for easy access
-from .engine import SqueezeFlowBacktestEngine
-
-# Core components
-from .core.portfolio import PortfolioManager, Position, PositionType, RiskLimits
-from .core.fees import FeeCalculator, TradingCosts
-from .core.strategy import BaseStrategy, TradingSignal, SignalStrength
-
-# Visualization
-from .visualization.plotter import BacktestPlotter
+__author__ = "SqueezeFlow Trader Team"
 
 __all__ = [
-    "SqueezeFlowBacktestEngine",
-    "PortfolioManager", "Position", "PositionType", "RiskLimits",
-    "FeeCalculator", "TradingCosts", 
-    "BaseStrategy", "TradingSignal", "SignalStrength",
-    "BacktestPlotter"
+    "BacktestEngine",
+    "Portfolio",
+    "Position",
+    "BacktestLogger",
+    "BacktestVisualizer",
+    "HTMLReporter",
+    "PNGPlotter"
 ]

@@ -1,0 +1,654 @@
+{
+  "summary": {
+    "total_tests": 6,
+    "passed": 2,
+    "failed": 4,
+    "skipped": 0,
+    "success_rate": 33.33333333333333,
+    "total_execution_time": 8.479065179824829,
+    "timestamp": "2025-08-05T16:30:05.609085"
+  },
+  "system_health": "DEGRADED",
+  "detailed_results": [
+    {
+      "test_name": "Infrastructure Health Check",
+      "status": "FAIL",
+      "execution_time": 0.32813096046447754,
+      "details": {
+        "docker_services": {
+          "healthy": false,
+          "total_services": 9,
+          "running_services": 0,
+          "services": [
+            {
+              "Command": "\"/entrypoint.sh chro\u2026\"",
+              "CreatedAt": "2025-08-05 16:05:36 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "65e0f0c5e03a",
+              "Image": "chronograf:latest",
+              "Labels": "com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,desktop.docker.io/binds/0/Source=/Users/u/PycharmProjects/SqueezeFlow Trader/aggr-server/data/chronograf,desktop.docker.io/binds/0/SourceKind=hostFile,com.docker.compose.config-hash=547d160c9bede9740081deb1f932fd0c5d42ffcaab43161ec5f7baf8d98f7a66,desktop.docker.io/ports.scheme=v2,com.docker.compose.container-number=1,com.docker.compose.depends_on=aggr-influx:service_started:false,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.version=2.37.1,desktop.docker.io/binds/0/Target=/var/lib/chronograf,com.docker.compose.image=sha256:d5746c708d06fe73e16df492741fd33c671682414bf57fbf203a15f23ef2ee6e,com.docker.compose.oneoff=False,com.docker.compose.service=aggr-chronograf,desktop.docker.io/ports/8888/tcp=:8885",
+              "LocalVolumes": "0",
+              "Mounts": "/host_mnt/User\u2026",
+              "Name": "aggr-chronograf",
+              "Names": "aggr-chronograf",
+              "Networks": "aggr_backend,squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:8885->8888/tcp, [::]:8885->8888/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 8888,
+                  "PublishedPort": 8885,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 8888,
+                  "PublishedPort": 8885,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "aggr-chronograf",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 23 minutes"
+            },
+            {
+              "Command": "\"/entrypoint.sh infl\u2026\"",
+              "CreatedAt": "2025-08-05 16:06:10 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "6fd8e9ecf4f6",
+              "Image": "influxdb:1.8.10",
+              "Labels": "com.docker.compose.depends_on=,com.docker.compose.oneoff=False,com.docker.compose.project=squeezeflow-trader,com.docker.compose.version=2.37.1,com.docker.compose.config-hash=db920b470e0f2d634a66c1d854a84b2aceb88a4ff18cb1405597cabbf5ff1bf5,com.docker.compose.image=sha256:299ebda2c7e308dbef42e26ac9b8fd1d9b3bcb8a0aee80c6509aa0219c1d0290,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.replace=3ad40c0bbfadc62fae0b852567f15113c7aadc1eacdd18c8f4e245c1ec326781,com.docker.compose.service=aggr-influx,desktop.docker.io/ports.scheme=v2,desktop.docker.io/ports/8086/tcp=:8087,com.docker.compose.container-number=1",
+              "LocalVolumes": "1",
+              "Mounts": "squeezeflow-tr\u2026",
+              "Name": "aggr-influx",
+              "Names": "aggr-influx",
+              "Networks": "aggr_backend,squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:8087->8086/tcp, [::]:8087->8086/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 8086,
+                  "PublishedPort": 8087,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 8086,
+                  "PublishedPort": 8087,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "23 minutes ago",
+              "Service": "aggr-influx",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 5 minutes"
+            },
+            {
+              "Command": "\"/usr/bin/tini -- pm\u2026\"",
+              "CreatedAt": "2025-08-05 16:05:35 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "891d1108b036",
+              "Image": "squeezeflow-trader-aggr-server",
+              "Labels": "desktop.docker.io/binds/0/SourceKind=hostFile,desktop.docker.io/ports/3000/tcp=:3000,com.docker.compose.config-hash=ebf03e267d061a663f7b02fc091eac91cfa1886c9ce8826872b99714cd5d8c58,com.docker.compose.container-number=1,com.docker.compose.depends_on=,com.docker.compose.oneoff=False,com.docker.compose.project=squeezeflow-trader,com.docker.compose.service=aggr-server,com.docker.compose.image=sha256:ee5e00f4d448d4d1fc09cfdf138931d8ce1e5653105b0cc3574610acbaf7b7bf,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,desktop.docker.io/binds/0/Source=/Users/u/PycharmProjects/SqueezeFlow Trader/aggr-server,desktop.docker.io/binds/0/Target=/usr/src/app,desktop.docker.io/ports.scheme=v2,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.version=2.37.1",
+              "LocalVolumes": "0",
+              "Mounts": "/host_mnt/User\u2026",
+              "Name": "aggr-server",
+              "Names": "aggr-server",
+              "Networks": "aggr_backend,squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 3000,
+                  "PublishedPort": 3000,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 3000,
+                  "PublishedPort": 3000,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "aggr-server",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 24 minutes"
+            },
+            {
+              "Command": "\"freqtrade trade --c\u2026\"",
+              "CreatedAt": "2025-08-05 16:05:36 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "d787906fd1f9",
+              "Image": "squeezeflow-trader-freqtrade",
+              "Labels": "com.docker.compose.container-number=1,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.service=freqtrade,desktop.docker.io/binds/0/Source=/Users/u/PycharmProjects/SqueezeFlow Trader/freqtrade/user_data,com.docker.compose.version=2.37.1,desktop.docker.io/binds/0/Target=/freqtrade/user_data,desktop.docker.io/binds/1/Source=/Users/u/PycharmProjects/SqueezeFlow Trader/freqtrade/config/config.json,desktop.docker.io/binds/1/Target=/freqtrade/config/config.json,desktop.docker.io/ports/8080/tcp=:8080,com.docker.compose.depends_on=redis:service_started:false,strategy-runner:service_started:false,com.docker.compose.image=sha256:9b9a39726a071d9ce5990bba16ec41787d583430b8f2b48756540aa61b232b2b,com.docker.compose.oneoff=False,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,desktop.docker.io/binds/0/SourceKind=hostFile,desktop.docker.io/ports.scheme=v2,com.docker.compose.config-hash=49e0e22cc9b7b912dde06ca99eaa740c7add45a0d6b96a5071dee72b13ab2bbe,desktop.docker.io/binds/1/SourceKind=hostFile",
+              "LocalVolumes": "0",
+              "Mounts": "/host_mnt/User\u2026,/host_mnt/User\u2026",
+              "Name": "squeezeflow-freqtrade",
+              "Names": "squeezeflow-freqtrade",
+              "Networks": "squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 8080,
+                  "PublishedPort": 8080,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 8080,
+                  "PublishedPort": 8080,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "freqtrade",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 23 minutes"
+            },
+            {
+              "Command": "\"/docker-entrypoint.\u2026\"",
+              "CreatedAt": "2025-08-05 16:05:36 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "0a63bb0c4eb3",
+              "Image": "freqtradeorg/frequi:latest",
+              "Labels": "com.docker.compose.version=2.37.1,desktop.docker.io/ports/8080/tcp=:8081,com.docker.compose.container-number=1,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.service=freqtrade-ui,com.docker.compose.oneoff=False,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,desktop.docker.io/ports.scheme=v2,maintainer=NGINX Docker Maintainers <docker-maint@nginx.com>,com.docker.compose.config-hash=5473923c5f4a22aaa2479e0d0d1ffca5556d8560655922111a38497aabe136ec,com.docker.compose.depends_on=freqtrade:service_started:false,com.docker.compose.image=sha256:81c9199dff7d1593453a7cfdf17d9c5554e976b1ecc6ae4915ecd588d0b2c4fa",
+              "LocalVolumes": "0",
+              "Mounts": "",
+              "Name": "squeezeflow-freqtrade-ui",
+              "Names": "squeezeflow-freqtrade-ui",
+              "Networks": "squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:8081->8080/tcp, [::]:8081->8080/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 8080,
+                  "PublishedPort": 8081,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 8080,
+                  "PublishedPort": 8081,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "freqtrade-ui",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 23 minutes"
+            },
+            {
+              "Command": "\"/app/entrypoint.sh\"",
+              "CreatedAt": "2025-08-05 16:05:36 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "29839ba4a36c",
+              "Image": "squeezeflow-trader-system-monitor",
+              "Labels": "desktop.docker.io/binds/0/Target=/var/run/docker.sock,com.docker.compose.image=sha256:bc841753974a524e59e0d728e81f60ceee1376b820a0c3f0f17fb1b85e80ba8e,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.container-number=1,com.docker.compose.depends_on=aggr-influx:service_started:false,com.docker.compose.service=system-monitor,com.docker.compose.version=2.37.1,desktop.docker.io/binds/0/SourceKind=dockerSocketProxied,com.docker.compose.config-hash=40e27de7ba21146c193f93abd51883262f36812593b9394cc27fb38e35b04714,com.docker.compose.project=squeezeflow-trader,desktop.docker.io/ports.scheme=v2,com.docker.compose.oneoff=False,desktop.docker.io/binds/0/Source=/var/run/docker.sock",
+              "LocalVolumes": "0",
+              "Mounts": "/proc,/sys,/run/host-serv\u2026",
+              "Name": "squeezeflow-monitor",
+              "Names": "squeezeflow-monitor",
+              "Networks": "squeezeflow-trader_squeezeflow_network",
+              "Ports": "",
+              "Project": "squeezeflow-trader",
+              "Publishers": [],
+              "RunningFor": "24 minutes ago",
+              "Service": "system-monitor",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 23 minutes"
+            },
+            {
+              "Command": "\"/app/entrypoint.sh\"",
+              "CreatedAt": "2025-08-05 16:05:36 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "7e243e1f8fe2",
+              "Image": "squeezeflow-trader-oi-tracker",
+              "Labels": "com.docker.compose.config-hash=6e44fa3a060ba405c6a11dead15e1670f8ed842a44d4b8abb3cceb5d21343941,com.docker.compose.container-number=1,com.docker.compose.image=sha256:305593a1d0fd194b6cb87bb38978af2c540bb131142be78b7416076bcaceac89,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.version=2.37.1,com.docker.compose.depends_on=aggr-influx:service_started:false,redis:service_started:false,com.docker.compose.oneoff=False,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.service=oi-tracker,desktop.docker.io/ports.scheme=v2",
+              "LocalVolumes": "0",
+              "Mounts": "",
+              "Name": "squeezeflow-oi-tracker",
+              "Names": "squeezeflow-oi-tracker",
+              "Networks": "squeezeflow-trader_squeezeflow_network",
+              "Ports": "8000/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "",
+                  "TargetPort": 8000,
+                  "PublishedPort": 0,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "oi-tracker",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 23 minutes"
+            },
+            {
+              "Command": "\"docker-entrypoint.s\u2026\"",
+              "CreatedAt": "2025-08-05 16:05:35 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "",
+              "ID": "45d74cd0dd27",
+              "Image": "redis:7-alpine",
+              "Labels": "com.docker.compose.depends_on=,com.docker.compose.image=sha256:0c0142c3cd69bc030ea09fecfa1c1c0c7d0e7d6081be6bb4957804f23d2cf57a,desktop.docker.io/ports/6379/tcp=:6379,com.docker.compose.config-hash=49bab827286437d381704edf76220cf314fd60d5f46d99abc3dc2572628f9bc1,com.docker.compose.oneoff=False,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.service=redis,com.docker.compose.version=2.37.1,desktop.docker.io/ports.scheme=v2,com.docker.compose.container-number=1",
+              "LocalVolumes": "1",
+              "Mounts": "squeezeflow-tr\u2026",
+              "Name": "squeezeflow-redis",
+              "Names": "squeezeflow-redis",
+              "Networks": "squeezeflow-trader_squeezeflow_network",
+              "Ports": "0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "0.0.0.0",
+                  "TargetPort": 6379,
+                  "PublishedPort": 6379,
+                  "Protocol": "tcp"
+                },
+                {
+                  "URL": "::",
+                  "TargetPort": 6379,
+                  "PublishedPort": 6379,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "24 minutes ago",
+              "Service": "redis",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 24 minutes"
+            },
+            {
+              "Command": "\"/app/entrypoint.sh\"",
+              "CreatedAt": "2025-08-05 16:21:06 +0200 CEST",
+              "ExitCode": 0,
+              "Health": "healthy",
+              "ID": "7563e2e0cd01",
+              "Image": "squeezeflow-trader-strategy-runner",
+              "Labels": "com.docker.compose.depends_on=redis:service_started:false,aggr-influx:service_started:false,com.docker.compose.image=sha256:0a990bd67a63cd8c7bf551b79fd5e24891601cd70dc4e7ab5a0294360a5c7f26,com.docker.compose.oneoff=False,com.docker.compose.replace=17572570bdbbef30f09371010f161e689471ad267c7be5d9b8242635b267a109,com.docker.compose.version=2.37.1,com.docker.compose.config-hash=711bb965081ba229b48226d917bf6872680ea8b5c3482106be0a981896075c58,com.docker.compose.project=squeezeflow-trader,com.docker.compose.project.config_files=/Users/u/PycharmProjects/SqueezeFlow Trader/docker-compose.yml,com.docker.compose.project.working_dir=/Users/u/PycharmProjects/SqueezeFlow Trader,com.docker.compose.service=strategy-runner,desktop.docker.io/ports.scheme=v2,com.docker.compose.container-number=1",
+              "LocalVolumes": "0",
+              "Mounts": "",
+              "Name": "squeezeflow-strategy-runner",
+              "Names": "squeezeflow-strategy-runner",
+              "Networks": "aggr_backend,squeezeflow-trader_squeezeflow_network",
+              "Ports": "8001/tcp",
+              "Project": "squeezeflow-trader",
+              "Publishers": [
+                {
+                  "URL": "",
+                  "TargetPort": 8001,
+                  "PublishedPort": 0,
+                  "Protocol": "tcp"
+                }
+              ],
+              "RunningFor": "8 minutes ago",
+              "Service": "strategy-runner",
+              "Size": "0B",
+              "State": "running",
+              "Status": "Up 8 minutes (healthy)"
+            }
+          ]
+        },
+        "influxdb": {
+          "healthy": true,
+          "databases": 2,
+          "measurements": 0
+        },
+        "redis": {
+          "healthy": true,
+          "connection": true
+        },
+        "aggr_server": {
+          "healthy": true,
+          "status_code": 200
+        },
+        "freqtrade": {
+          "healthy": true,
+          "status_code": 200
+        }
+      },
+      "error": null
+    },
+    {
+      "test_name": "Data Flow Pipeline",
+      "status": "FAIL",
+      "execution_time": 0.04492688179016113,
+      "details": {
+        "data_collection": {
+          "success": false,
+          "error": "retention policy not found: aggr_1m"
+        },
+        "data_storage": {
+          "success": false,
+          "timeframe_data": {
+            "1m": 0,
+            "5m": 0,
+            "15m": 0,
+            "30m": 0,
+            "1h": 0,
+            "4h": 0
+          },
+          "total_points": 0
+        },
+        "data_processing": {
+          "success": false,
+          "error": "object list can't be used in 'await' expression"
+        },
+        "cvd_accuracy": {
+          "success": false,
+          "error": "retention policy not found: aggr_5m"
+        }
+      },
+      "error": null
+    },
+    {
+      "test_name": "Strategy Integration",
+      "status": "FAIL",
+      "execution_time": 0.0008859634399414062,
+      "details": {
+        "strategy_init": {
+          "success": false,
+          "components_loaded": {
+            "phase1": false,
+            "phase2": false,
+            "phase3": false,
+            "phase4": false,
+            "phase5": false
+          },
+          "config_loaded": true
+        },
+        "signal_generation": {
+          "success": false,
+          "error": "retention policy not found: aggr_5m"
+        },
+        "scoring_system": {
+          "success": true,
+          "max_possible_score": 10.0,
+          "scoring_weights": {
+            "cvd_reset_deceleration": 3.5,
+            "absorption_candle": 2.5,
+            "failed_breakdown": 2.0,
+            "directional_bias": 2.0
+          },
+          "test_scores": [
+            4.0,
+            6.5,
+            8.0,
+            2.5,
+            7.5
+          ],
+          "valid_scores": 5
+        },
+        "position_sizing": {
+          "success": true,
+          "test_results": [
+            {
+              "score": 4.5,
+              "size_correct": true,
+              "leverage_correct": true
+            },
+            {
+              "score": 6.5,
+              "size_correct": true,
+              "leverage_correct": true
+            },
+            {
+              "score": 8.5,
+              "size_correct": true,
+              "leverage_correct": true
+            }
+          ],
+          "position_sizing_rules": {
+            "4-5": 0.5,
+            "6-7": 1.0,
+            "8+": 1.5
+          },
+          "leverage_rules": {
+            "4-5": 2,
+            "6-7": 3,
+            "8+": 5
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "test_name": "Signal Flow Processing",
+      "status": "PASS",
+      "execution_time": 3.0069739818573,
+      "details": {
+        "signal_publishing": {
+          "success": true,
+          "signal_published": {
+            "signal_id": "test_signal_1754404197",
+            "timestamp": "2025-08-05T16:29:57.504380",
+            "symbol": "BTCUSDT",
+            "action": "LONG",
+            "score": 7.5,
+            "position_size_factor": 1.0,
+            "leverage": 3,
+            "entry_price": 50000,
+            "ttl": 300
+          },
+          "signal_retrieved": {
+            "signal_id": "test_signal_1754404197",
+            "timestamp": "2025-08-05T16:29:57.504380",
+            "symbol": "BTCUSDT",
+            "action": "LONG",
+            "score": 7.5,
+            "position_size_factor": 1.0,
+            "leverage": 3,
+            "entry_price": 50000,
+            "ttl": 300
+          },
+          "keys_match": true
+        },
+        "signal_format": {
+          "success": true,
+          "validation_results": {
+            "has_all_fields": true,
+            "valid_action": true,
+            "valid_score": true,
+            "valid_leverage": true,
+            "valid_ttl": true
+          },
+          "required_fields": [
+            "signal_id",
+            "timestamp",
+            "symbol",
+            "action",
+            "score",
+            "position_size_factor",
+            "leverage",
+            "entry_price",
+            "ttl"
+          ],
+          "test_signal": {
+            "signal_id": "test_format_signal",
+            "timestamp": "2025-08-05T16:29:57.505472",
+            "symbol": "BTCUSDT",
+            "action": "LONG",
+            "score": 7.5,
+            "position_size_factor": 1.0,
+            "leverage": 3,
+            "entry_price": 50000,
+            "ttl": 300
+          }
+        },
+        "signal_ttl": {
+          "success": true,
+          "exists_immediately": true,
+          "exists_after_ttl": false,
+          "ttl_seconds": 2
+        },
+        "signal_uniqueness": {
+          "success": true,
+          "total_signals": 5,
+          "unique_ids": 5,
+          "sample_ids": [
+            "unique_test_1754404200_0",
+            "unique_test_1754404200_1",
+            "unique_test_1754404200_2"
+          ]
+        }
+      },
+      "error": null
+    },
+    {
+      "test_name": "FreqTrade Integration",
+      "status": "PASS",
+      "execution_time": 0.031147003173828125,
+      "details": {
+        "freqtrade_api": {
+          "success": true,
+          "endpoint_results": {
+            "ping": {
+              "status_code": 200,
+              "success": true
+            },
+            "status": {
+              "status_code": 401,
+              "success": false
+            },
+            "balance": {
+              "status_code": 401,
+              "success": false
+            },
+            "trades": {
+              "status_code": 401,
+              "success": false
+            }
+          },
+          "successful_endpoints": 1,
+          "total_endpoints": 4
+        },
+        "signal_consumption": {
+          "success": true,
+          "signals_available": 7,
+          "signals_consumed": 7,
+          "test_signal_found": true
+        },
+        "position_management": {
+          "success": true,
+          "can_open_position": true,
+          "current_positions": {
+            "open_positions": 2,
+            "max_positions": 5,
+            "total_exposure": 0.08,
+            "max_exposure": 0.15,
+            "available_margin": 0.92
+          },
+          "risk_metrics": {
+            "position_utilization": 0.4,
+            "exposure_utilization": 0.5333333333333333,
+            "margin_available": 0.92
+          }
+        },
+        "risk_management": {
+          "success": true,
+          "risk_limits": {
+            "max_position_size": 0.02,
+            "max_total_exposure": 0.1,
+            "max_daily_loss": 0.05,
+            "max_drawdown": 0.15,
+            "stop_loss_percentage": 0.025
+          },
+          "scenario_results": [
+            {
+              "scenario": {
+                "position_size": 0.01,
+                "should_pass": true
+              },
+              "passes_validation": true,
+              "expected_result": true,
+              "correct": true
+            },
+            {
+              "scenario": {
+                "position_size": 0.03,
+                "should_pass": false
+              },
+              "passes_validation": false,
+              "expected_result": false,
+              "correct": true
+            },
+            {
+              "scenario": {
+                "total_exposure": 0.08,
+                "should_pass": true
+              },
+              "passes_validation": true,
+              "expected_result": true,
+              "correct": true
+            },
+            {
+              "scenario": {
+                "total_exposure": 0.12,
+                "should_pass": false
+              },
+              "passes_validation": false,
+              "expected_result": false,
+              "correct": true
+            }
+          ]
+        }
+      },
+      "error": null
+    },
+    {
+      "test_name": "Performance Tests",
+      "status": "FAIL",
+      "execution_time": 5.066009998321533,
+      "details": {
+        "data_latency": {
+          "avg_latency": Infinity,
+          "error": "retention policy not found: aggr_1m"
+        },
+        "signal_performance": {
+          "signals_per_second": 9.905401533605879,
+          "total_signals": 50,
+          "total_time": 5.047750949859619
+        },
+        "memory_usage": {
+          "peak_mb": Infinity,
+          "error": "No module named 'psutil'"
+        },
+        "throughput": {
+          "redis_ops_per_sec": 0,
+          "influx_ops_per_sec": 0,
+          "error": "retention policy not found: aggr_1m"
+        }
+      },
+      "error": null
+    }
+  ],
+  "recommendations": [
+    "Fix Docker service issues - some services are not running properly",
+    "Investigate data collection or storage issues",
+    "Review strategy implementation and configuration",
+    "Investigate performance bottlenecks and resource usage"
+  ]
+}
