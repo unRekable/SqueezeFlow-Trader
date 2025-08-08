@@ -109,7 +109,7 @@ log_level: 'INFO'
 ### 3. Environment Variables (Optional)
 
 ```bash
-export SQUEEZEFLOW_RUN_INTERVAL=60
+export SQUEEZEFLOW_RUN_INTERVAL=1
 export SQUEEZEFLOW_MAX_SYMBOLS=10
 export SQUEEZEFLOW_TIMEFRAME=5m
 export REDIS_HOST=localhost

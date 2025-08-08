@@ -393,7 +393,12 @@ class StrategyRunner:
         if self.config.enable_parallel_processing:
             # Process symbols in parallel
             tasks = [self._process_symbol(symbol) for symbol in symbols_to_process]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Log any exceptions from parallel processing
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    self.logger.error(f"Error processing {symbols_to_process[i]}: {result}")
         else:
             # Process symbols sequentially
             for symbol in symbols_to_process:
@@ -410,10 +415,11 @@ class StrategyRunner:
                 self.logger.debug(f"{symbol}: Skipping due to cooldown")
                 return
             
-            # Load real-time data
+            # Load real-time data with 1s data support
             dataset = await self._load_symbol_data(symbol)
             if not dataset or not self._validate_dataset(dataset):
-                self.logger.warning(f"{symbol}: Invalid or insufficient data")
+                data_source = dataset.get('data_source', 'unknown') if dataset else 'no_data'
+                self.logger.warning(f"{symbol}: Invalid or insufficient data (source: {data_source})")
                 return
             
             # Get real portfolio state from FreqTrade or use mock data
@@ -495,23 +501,39 @@ class StrategyRunner:
             self.performance_stats['errors_encountered'] += 1
     
     async def _load_symbol_data(self, symbol: str) -> Optional[Dict]:
-        """Load real-time data for symbol with CVD calculations"""
+        """Load real-time data for symbol with CVD calculations using efficient 1s data"""
         
         try:
-            # Calculate time range
+            # Calculate time range with limited lookback for real-time efficiency
             end_time = datetime.now()
-            start_time = end_time - timedelta(hours=self.config.data_lookback_hours)
             
-            # Load complete dataset using data pipeline
-            dataset = self.data_pipeline.get_complete_dataset(
+            # For real-time trading, use limited lookback to improve performance
+            # 30 minutes provides sufficient data for strategy while keeping queries fast
+            max_lookback_minutes = 30
+            start_time = end_time - timedelta(minutes=max_lookback_minutes)
+            
+            # Use async data loading with 1-second data preference
+            dataset = await self.data_pipeline.get_complete_dataset_async(
                 symbol=symbol,
                 start_time=start_time,
                 end_time=end_time,
-                timeframe=self.config.default_timeframe
+                timeframe=self.config.default_timeframe,
+                prefer_1s_data=True,
+                max_lookback_minutes=max_lookback_minutes
             )
             
             if not dataset or dataset.get('ohlcv', pd.DataFrame()).empty:
+                self.logger.warning(f"No data loaded for {symbol}")
                 return None
+            
+            # Log data source and efficiency info
+            data_source = dataset.get('data_source', 'unknown')
+            data_points = dataset.get('metadata', {}).get('data_points', 0)
+            
+            if data_source == '1s_aggregated':
+                self.logger.debug(f"{symbol}: Using 1s aggregated data ({data_points} bars, {max_lookback_minutes}min lookback)")
+            else:
+                self.logger.debug(f"{symbol}: Using {data_source} data ({data_points} bars)")
             
             # The data pipeline automatically calculates CVD using CVDCalculator
             # This is different from backtest where CVD is pre-calculated

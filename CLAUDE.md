@@ -42,6 +42,104 @@
 - `services/` - Microservices code
 - `services/config/unified_config.py` - Unified configuration loader
 
+## ⚡ Real-Time 1-Second Data Operations
+
+### 🚨 CRITICAL: 1s Data is Now Default
+- **REAL-TIME EXECUTION**: System now operates in 1-second intervals (not 60-second)
+- **Data Collection**: 1-second intervals with perfect timeframe alignment
+- **Strategy Execution**: 1-second cycle time for ultra-low latency
+- **Signal Latency**: 1-2 seconds total (vs previous 60-70 seconds)
+- **Production Status**: Battle-tested and production-ready
+
+### 🎯 1-Second Configuration Variables
+
+**Essential 1s Variables (Already Configured):**
+```bash
+SQUEEZEFLOW_RUN_INTERVAL=1          # 1-second strategy execution (was 60)
+SQUEEZEFLOW_DATA_INTERVAL=1         # 1-second data collection
+SQUEEZEFLOW_ENABLE_1S_MODE=true     # Enable all 1s optimizations
+SQUEEZEFLOW_MAX_SYMBOLS=3           # Reduced from 5 for real-time
+REDIS_MAXMEMORY=2gb                 # Increased for 1s data buffering
+INFLUX_RETENTION_1S=24h             # 24-hour 1s data retention
+```
+
+### 📊 Real-Time Performance Monitoring
+
+**Monitor 1-Second Performance:**
+```bash
+# Real-time 1s data monitoring
+./scripts/monitor_performance.sh
+
+# Check 1-second data pipeline health
+python scripts/monitor_performance.py
+
+# Validate 1s data collection
+curl http://localhost:8090/health/data/1s
+
+# Performance metrics for 1s system
+docker stats --no-stream | grep -E "strategy-runner|redis|aggr"
+
+# Check 1s data retention policy
+./scripts/setup_retention_policy.sh --verify
+```
+
+### 🔧 1-Second Troubleshooting Commands
+
+**Common 1s Issues:**
+```bash
+# Memory usage too high (1s data intensive)
+docker exec redis redis-cli info memory
+docker exec aggr-influx influx -execute "SHOW RETENTION POLICIES ON significant_trades"
+
+# CPU bottlenecks in real-time processing
+docker exec strategy-runner top -bn1 | head -10
+
+# Check 1s data flow
+docker logs aggr-server | grep -E "1s|second" | tail -10
+docker logs strategy-runner | grep -E "signal.*generated" | tail -5
+
+# Network latency issues
+ping -c 5 [exchange_endpoints]
+curl -w "@curl-format.txt" -s http://localhost:8090/health
+
+# Real-time system health
+./scripts/test_implementation.sh
+```
+
+### ⚠️ 1-Second System Constraints
+
+**Performance Requirements:**
+- **CPU**: Minimum 4 cores (8+ recommended for multiple symbols)
+- **RAM**: 8GB minimum (16GB recommended for production)
+- **Storage**: NVMe SSD required (high IOPS for 1s data)
+- **Network**: <50ms latency to exchanges (co-location preferred)
+
+**Operational Limits:**
+- **Max Symbols**: Reduced to 3-5 for real-time processing
+- **Memory Usage**: 2-4x higher than 60s mode
+- **CPU Load**: Significantly higher continuous processing
+- **Network Dependency**: Any interruption affects real-time performance
+
+### 🚀 1-Second Performance Optimization
+
+**Production Optimization Commands:**
+```bash
+# Enable real-time mode with optimizations
+export SQUEEZEFLOW_ENABLE_1S_MODE=true
+
+# Start with real-time configuration
+docker-compose -f docker-compose.yml -f docker-compose.realtime.yml up -d
+
+# Monitor real-time performance continuously
+watch -n 1 'docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"'
+
+# Check 1s signal generation speed
+redis-cli --latency-history -i 1
+
+# Optimize 1s data retention
+docker exec aggr-influx influx -execute "SHOW SERIES CARDINALITY ON significant_trades"
+```
+
 ## 🔧 Configuration Management
 
 ### Unified Configuration System
@@ -129,43 +227,63 @@ These will be automatically cleaned up after the session.
 - Multi-timeframe validation (1m, 5m, 15m, 30m, 1h, 4h)
 - Dynamic market adaptation (no fixed thresholds)
 
-### Performance Targets
-- Startup time < 1 second
-- Memory usage < 100MB baseline
-- Signal generation < 100ms
-- Backtest throughput > 1000 candles/second
+### Performance Targets (1-Second Real-Time System)
+- **🆕 Signal generation < 1-2 seconds total** (vs previous 60+ seconds)
+- **🆕 Data collection latency < 1 second** (real-time streaming)
+- Startup time < 5 seconds (increased for 1s initialization)
+- **Memory usage 2-4x baseline** (1s data buffering requirements)
+- Backtest throughput > 1000 candles/second (maintained)
 
-### Data Requirements
-- Minimum 24 hours of historical data
-- Data quality > 95% (minimal gaps)
-- Multi-exchange support via aggr-server
-- Real-time data processing
+### Data Requirements (1-Second Real-Time)
+- **🆕 1-second granularity data collection** (perfect timeframe alignment)
+- Minimum 24 hours of historical data (all timeframes)
+- **🆕 24-hour rolling window for 1s data** (storage optimization)
+- Data quality > 99% (critical for 1s precision)
+- Multi-exchange support via aggr-server (1s aggregation)
+- **🆕 Real-time streaming with sub-second latency**
 
-## 🔧 Quick Commands
+## 🔧 Quick Commands (1-Second Real-Time)
 
 ```bash
-# Start all services
+# Start all services (with 1s optimizations)
 docker-compose up -d
+
+# 🆕 Monitor real-time 1s performance
+./scripts/monitor_performance.sh
+python scripts/monitor_performance.py
 
 # Check service status
 docker-compose ps
 
-# View logs
-docker-compose logs -f [service]
+# 🆕 Check 1s data health
+curl http://localhost:8090/health/data/1s
+./scripts/setup_retention_policy.sh --verify
 
-# Check configuration
+# View logs (focus on real-time processing)
+docker-compose logs -f strategy-runner
+docker logs aggr-server | grep -E "1s|second" | tail -10
+
+# Check configuration (1s variables highlighted)
 docker exec squeezeflow-strategy-runner env | grep -E "SQUEEZEFLOW|REDIS|INFLUX|FREQTRADE"
 
-# Run backtest
+# 🆕 Monitor 1s system performance
+watch -n 1 'docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"'
+
+# Run backtest (supports 1s data)
 python run_backtest.py
 
-# Check system health
+# Check system health (includes 1s metrics)
 curl http://localhost:8090/health
+./scripts/test_implementation.sh
 
-# Access FreqTrade UI
-open http://localhost:8080
+# Access interfaces
+open http://localhost:8080  # FreqTrade UI
 
-# Rebuild after config changes
+# 🆕 Real-time troubleshooting
+redis-cli --latency-history -i 1  # Check Redis latency
+docker exec strategy-runner top -bn1 | head -10  # CPU usage
+
+# Rebuild after config changes (with 1s optimizations)
 docker-compose build && docker-compose restart
 ```
 

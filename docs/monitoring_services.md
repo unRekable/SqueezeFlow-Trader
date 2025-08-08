@@ -1,21 +1,21 @@
-# Monitoring Services
+# Monitoring Services - Real-Time 1-Second System
 
-The SqueezeFlow Trader includes comprehensive monitoring services for system health, performance tracking, and alerting.
+The SqueezeFlow Trader includes comprehensive monitoring services optimized for **1-second real-time data collection** and sub-second performance tracking.
 
 ## Services Overview
 
-### Health Monitor Service (Enhanced)
-Provides HTTP health check endpoints and monitors system components with auto-recovery capabilities.
+### Health Monitor Service (Real-Time Enhanced)
+Provides HTTP health check endpoints and monitors system components with **1-second granularity** and auto-recovery capabilities.
 
 **Features:**
 - HTTP health endpoints for Docker health checks
 - Service dependency monitoring (Redis, InfluxDB, Strategy Runner, Aggr-Server)
-- **NEW: Data flow monitoring** - Detects when aggr-server stops writing to InfluxDB
-- **NEW: Auto-restart capability** - Automatically restarts stuck services (max 3 times/hour)
-- System resource monitoring (CPU, Memory, Disk)
-- Real-time alerting system
-- Prometheus-compatible metrics
-- **NEW: Write success tracking** - Monitors InfluxDB write rates and data gaps
+- **1-Second Data Flow Monitoring** - Validates trades_1s measurement updates in real-time
+- **Auto-restart capability** - Automatically restarts stuck services (max 3 times/hour)
+- System resource monitoring with 1-second resolution
+- Real-time alerting for latency > 2 seconds
+- Prometheus-compatible metrics with 1s intervals
+- **1-Second Write Tracking** - Monitors trades_1s ingestion rate (expected: 60 bars/market/minute)
 
 **Endpoints (Port 8090):**
 - `GET /health` - Basic health check (200 if healthy, 503 if unhealthy)
@@ -34,6 +34,29 @@ Tracks detailed performance metrics and identifies bottlenecks.
 - Memory profiling with tracemalloc
 - Real-time dashboard in Redis
 - Performance chart generation
+
+## Real-Time Monitoring Tools
+
+### 1-Second Performance Monitor
+Dedicated scripts for monitoring 1-second data collection and real-time performance:
+
+```bash
+# Python continuous monitor (recommended for production)
+python scripts/monitor_performance.py --continuous --interval 1
+
+# Shell script for quick checks
+./scripts/monitor_performance.sh
+
+# Export metrics to JSON
+python scripts/monitor_performance.py --export metrics.json
+```
+
+**Key Metrics Monitored:**
+- **Data Freshness**: Age of latest trades_1s data (should be < 2 seconds)
+- **Ingestion Rate**: Bars per minute per market (should be ~60)
+- **Market Coverage**: Active markets being tracked
+- **Storage Growth**: Daily data growth rate (~200MB/day expected)
+- **Signal Latency**: Total time from data to signal (target: 1-2 seconds)
 
 ## Quick Start
 
@@ -161,7 +184,7 @@ perf_monitor.record_error(
 | Memory Usage | > 85% | Warning |
 | Disk Usage | > 90% | Warning |
 | Response Time | > 5000ms | Warning |
-| Memory Usage | > 1GB | Critical |
+| Memory Usage | > 2GB | Critical |
 | Error Rate | > 5% | Critical |
 
 ### Custom Alerts

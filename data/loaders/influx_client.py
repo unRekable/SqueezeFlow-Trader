@@ -94,8 +94,8 @@ class OptimizedInfluxClient:
         # Thread executor for parallel operations
         self.executor = ThreadPoolExecutor(max_workers=self.config.connection_pool_size)
         
-        # Pre-compiled query templates - CORRECTED for dual data structure
-        # Historical data is in 'trades_1m', live data is in 'aggr_1m.trades_1m' 
+        # Pre-compiled query templates with 1-second data support
+        # 1-second data is in 'trades_1s', other data in 'aggr_{timeframe}.trades_{timeframe}' 
         self.query_templates = {
             'historical_ohlcv_data': """
                 SELECT 
@@ -123,6 +123,40 @@ class OptimizedInfluxClient:
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'
                 GROUP BY time({timeframe}), market
+                ORDER BY time ASC
+            """,
+            
+            # NEW: 1-second data queries
+            'ohlcv_1s_data': """
+                SELECT 
+                    first(open) AS open,
+                    max(high) AS high,
+                    min(low) AS low,
+                    last(close) AS close,
+                    sum(vbuy) + sum(vsell) AS volume
+                FROM "trades_1s"
+                WHERE ({market_conditions})
+                AND time >= '{start_time}'
+                AND time <= '{end_time}'
+                GROUP BY time({group_by_interval})
+                FILL(null)
+                ORDER BY time ASC
+            """,
+            
+            'volume_1s_data': """
+                SELECT 
+                    sum(vbuy) AS total_vbuy,
+                    sum(vsell) AS total_vsell,
+                    sum(cbuy) AS total_cbuy,
+                    sum(csell) AS total_csell,
+                    sum(lbuy) AS total_lbuy,
+                    sum(lsell) AS total_lsell
+                FROM "trades_1s"
+                WHERE ({market_conditions})
+                AND time >= '{start_time}'
+                AND time <= '{end_time}'
+                GROUP BY time({group_by_interval})
+                FILL(0)
                 ORDER BY time ASC
             """,
             
@@ -699,6 +733,131 @@ class OptimizedInfluxClient:
         except RuntimeError:
             # No event loop running, we can create one
             return asyncio.run(self.get_volume_data_optimized(markets, start_time, end_time, timeframe))
+    
+    async def get_1s_data_with_aggregation(self, markets: List[str], start_time: datetime,
+                                         end_time: datetime, target_timeframe: str = '5m',
+                                         max_lookback_minutes: int = 30) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Get 1-second data and aggregate to target timeframe with limited lookback
+        Optimized for real-time strategy processing
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime  
+            target_timeframe: Target aggregation timeframe (5m, 15m, 1h, etc.)
+            max_lookback_minutes: Maximum lookback to prevent large queries
+            
+        Returns:
+            Tuple of (ohlcv_df, volume_df) aggregated to target timeframe
+        """
+        try:
+            # Limit lookback for real-time efficiency
+            limited_start = max(start_time, end_time - timedelta(minutes=max_lookback_minutes))
+            
+            # Check if 1s data is available
+            availability = await self._check_1s_data_availability(markets, limited_start, end_time)
+            
+            if not availability['has_recent_data']:
+                self.logger.warning("1-second data not available or too old, falling back to regular data")
+                return await self._get_fallback_data(markets, limited_start, end_time, target_timeframe)
+            
+            # Create market conditions
+            market_conditions = " OR ".join([f"market = '{market}'" for market in markets[:20]])  # Limit markets
+            
+            # Convert timeframe to group by interval
+            group_by_interval = self._convert_timeframe_to_interval(target_timeframe)
+            
+            # Query 1s OHLCV data with aggregation
+            ohlcv_query = self.query_templates['ohlcv_1s_data'].format(
+                market_conditions=market_conditions,
+                start_time=limited_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                end_time=end_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                group_by_interval=group_by_interval
+            )
+            
+            # Query 1s volume data with aggregation  
+            volume_query = self.query_templates['volume_1s_data'].format(
+                market_conditions=market_conditions,
+                start_time=limited_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                end_time=end_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                group_by_interval=group_by_interval
+            )
+            
+            # Execute queries in parallel
+            results = await self.execute_batch_queries_async([
+                (ohlcv_query, 'significant_trades'),
+                (volume_query, 'significant_trades')
+            ])
+            
+            ohlcv_df = results[0] if len(results) > 0 else pd.DataFrame()
+            volume_df = results[1] if len(results) > 1 else pd.DataFrame()
+            
+            # Aggregate across markets if multiple
+            if not ohlcv_df.empty and len(markets) > 1:
+                ohlcv_df = self._aggregate_ohlcv_data(ohlcv_df)
+            
+            self.logger.info(f"Retrieved 1s data: {len(ohlcv_df)} OHLCV bars, {len(volume_df)} volume bars ({target_timeframe})")
+            
+            return ohlcv_df, volume_df
+            
+        except Exception as e:
+            self.logger.error(f"1-second data retrieval failed: {e}")
+            return await self._get_fallback_data(markets, limited_start, end_time, target_timeframe)
+    
+    async def _check_1s_data_availability(self, markets: List[str], start_time: datetime, end_time: datetime) -> Dict:
+        """Check if 1-second data is available and recent"""
+        try:
+            # Check for recent data in trades_1s measurement
+            check_query = """
+                SELECT COUNT(*) as data_points
+                FROM "trades_1s"
+                WHERE time > now() - 5m
+                LIMIT 1
+            """
+            
+            result = await self.execute_query_async(check_query, 'significant_trades', enable_cache=False)
+            
+            has_recent_data = not result.empty and result.iloc[0].get('data_points', 0) > 0
+            
+            return {
+                'has_recent_data': has_recent_data,
+                'measurement_exists': True if has_recent_data else False,
+                'check_timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.debug(f"1s data availability check failed: {e}")
+            return {'has_recent_data': False, 'measurement_exists': False, 'error': str(e)}
+    
+    async def _get_fallback_data(self, markets: List[str], start_time: datetime, 
+                               end_time: datetime, timeframe: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Fallback to regular aggregated data when 1s data unavailable"""
+        try:
+            ohlcv_df = await self.get_ohlcv_data_optimized(markets, start_time, end_time, timeframe)
+            volume_df = await self.get_volume_data_optimized(markets, start_time, end_time, timeframe)
+            
+            self.logger.info(f"Using fallback data: {len(ohlcv_df)} OHLCV bars, {len(volume_df)} volume bars")
+            
+            return ohlcv_df, volume_df
+            
+        except Exception as e:
+            self.logger.error(f"Fallback data retrieval failed: {e}")
+            return pd.DataFrame(), pd.DataFrame()
+    
+    def _convert_timeframe_to_interval(self, timeframe: str) -> str:
+        """Convert timeframe string to InfluxDB GROUP BY interval"""
+        timeframe_mapping = {
+            '1m': '1m',
+            '5m': '5m', 
+            '15m': '15m',
+            '30m': '30m',
+            '1h': '1h',
+            '4h': '4h',
+            '1d': '1d'
+        }
+        
+        return timeframe_mapping.get(timeframe, '5m')
     
     def close(self):
         """Close all connections and cleanup"""

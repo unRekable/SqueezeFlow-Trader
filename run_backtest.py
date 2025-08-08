@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-SqueezeFlow Backtest Runner
-Easy-to-use interface for running backtests with the enhanced modular engine
+SqueezeFlow Backtest Runner with 1-Second Data Support
+Easy-to-use interface for running backtests with real-time data aggregation
 """
 
 import asyncio
@@ -10,9 +10,13 @@ from datetime import datetime, timedelta
 import sys
 import os
 import subprocess
+import argparse
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Import 1-second data loader
+from backtest.data_loader import BacktestDataLoader
 
 
 def get_date_range_suggestions():

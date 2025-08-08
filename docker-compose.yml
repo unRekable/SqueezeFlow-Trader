@@ -72,6 +72,13 @@ services:
       - "8086:8086"
     volumes:
       - influxdb_data:/var/lib/influxdb
+    environment:
+      - INFLUXDB_DB=significant_trades
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=admin123
+      - INFLUXDB_DATA_CACHE_MAX_MEMORY_SIZE=1g
+      - INFLUXDB_DATA_CACHE_SNAPSHOT_MEMORY_SIZE=25m
+      - INFLUXDB_DATA_MAX_CONCURRENT_COMPACTIONS=2
     networks:
       - squeezeflow_network
       - aggr_backend
@@ -79,7 +86,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 8192M
+          memory: 4096M
         reservations:
           cpus: '0.3'
           memory: 2048M
@@ -128,10 +135,10 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Europe/Berlin
-      - SQUEEZEFLOW_RUN_INTERVAL=60
-      - SQUEEZEFLOW_MAX_SYMBOLS=5
-      - SQUEEZEFLOW_LOOKBACK_HOURS=4
-      - SQUEEZEFLOW_TIMEFRAME=5m
+      - SQUEEZEFLOW_RUN_INTERVAL=1
+      - SQUEEZEFLOW_MAX_SYMBOLS=3
+      - SQUEEZEFLOW_LOOKBACK_HOURS=1
+      - SQUEEZEFLOW_TIMEFRAME=1m
       - SQUEEZEFLOW_MIN_DATA_POINTS=40
       - SQUEEZEFLOW_LOG_LEVEL=DEBUG
       - REDIS_HOST=redis
@@ -164,8 +171,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '0.5'
+          memory: 2G
+          cpus: '1.0'
         reservations:
           memory: 512M
           cpus: '0.25'

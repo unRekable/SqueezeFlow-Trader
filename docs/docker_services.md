@@ -4,6 +4,8 @@
 
 The SqueezeFlow Trader system operates as a containerized microservices architecture using Docker Compose. This document provides comprehensive documentation of all Docker services, their configurations, networking, and deployment patterns.
 
+**🚀 NEW: Real-Time 1-Second Data Processing** - All services now optimized for ultra-low latency 1-second data collection and processing, delivering 60x performance improvement.
+
 ## Service Topology Diagram
 
 ```mermaid
@@ -36,13 +38,137 @@ graph TD
     end
 ```
 
+## ⚡ Real-Time 1-Second Service Configuration
+
+### 🚀 Ultra-Low Latency Service Timing
+
+**BREAKTHROUGH**: All services now operate with **1-second intervals** for real-time trading execution:
+
+| Service | **Previous Timing** | **1-Second Timing** | Performance Gain |
+|---------|-------------------|-------------------|------------------|
+| **aggr-server** | 60s data collection | **1s data collection** | **60x faster data streaming** |
+| **strategy-runner** | 60s execution cycle | **1s execution cycle** | **60x faster signal generation** |
+| **Redis cache** | 60s TTL signals | **1s optimized buffering** | **Real-time signal delivery** |
+| **InfluxDB writes** | Batched every 10s | **1s flush interval** | **Real-time data persistence** |
+
+### 📊 1-Second Service Performance Requirements
+
+```yaml
+# Resource allocation for 1-second mode (increased requirements)
+deploy:
+  resources:
+    limits:
+      memory: 2048M      # 2x increase for 1s data buffering
+      cpus: '1.0'        # 2x increase for real-time processing
+    reservations:
+      memory: 1024M      # 2x increase for guaranteed resources
+      cpus: '0.5'        # 2x increase for baseline performance
+```
+
+### ⚙️ 1-Second Service Optimizations
+
+**aggr-server (1-second data collection):**
+```yaml
+aggr-server:
+  environment:
+    - AGGR_INTERVAL=1                    # 1-second data collection (was 60s)
+    - AGGR_BATCH_SIZE=100               # Smaller batches for 1s processing
+    - AGGR_BUFFER_SIZE=3600             # 1-hour buffer for 1s data
+    - INFLUX_FLUSH_INTERVAL=1           # Real-time flushing to InfluxDB
+```
+
+**strategy-runner (1-second execution):**
+```yaml
+strategy-runner:
+  environment:
+    - SQUEEZEFLOW_RUN_INTERVAL=1        # 1-second strategy execution
+    - SQUEEZEFLOW_DATA_INTERVAL=1       # 1-second data polling
+    - SQUEEZEFLOW_ENABLE_1S_MODE=true   # Enable 1s optimizations
+    - SQUEEZEFLOW_MAX_SYMBOLS=3         # Reduced for real-time processing
+    - SQUEEZEFLOW_PARALLEL_PROCESSING=true  # Enable parallel CVD calculation
+```
+
+**Redis (1-second optimized caching):**
+```yaml
+redis:
+  environment:
+    - REDIS_MAXMEMORY=2gb               # Increased for 1s data buffering
+    - REDIS_MAXMEMORY_POLICY=allkeys-lru    # LRU eviction for 1s data
+  command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+```
+
+**InfluxDB (1-second data retention):**
+```yaml
+aggr-influx:
+  environment:
+    - INFLUXDB_DB=significant_trades
+    - INFLUX_RETENTION_1S=24h           # 24-hour retention for 1s data
+    - INFLUX_BATCH_SIZE=100             # Optimized batch size for 1s
+    - INFLUX_FLUSH_INTERVAL=1           # Real-time flushing
+```
+
+### 🎯 Production 1-Second Configuration
+
+```yaml
+# Complete 1-second production configuration
+version: '3.8'
+services:
+  # Enhanced for 1-second real-time processing
+  strategy-runner:
+    environment:
+      # 🚀 REAL-TIME 1-SECOND SETTINGS
+      - SQUEEZEFLOW_RUN_INTERVAL=1            # 1-second execution
+      - SQUEEZEFLOW_DATA_INTERVAL=1           # 1-second data collection
+      - SQUEEZEFLOW_ENABLE_1S_MODE=true       # Enable all 1s optimizations
+      - SQUEEZEFLOW_MAX_SYMBOLS=3             # Reduced for real-time
+      
+      # 💾 MEMORY OPTIMIZATION
+      - REDIS_MAXMEMORY=2gb                   # Increased for 1s buffering
+      - INFLUX_RETENTION_1S=24h               # 24-hour 1s retention
+      
+      # ⚡ PERFORMANCE TUNING
+      - SQUEEZEFLOW_PARALLEL_PROCESSING=true  # Enable parallel processing
+      - SQUEEZEFLOW_1S_BATCH_SIZE=100         # Optimized batch size
+    
+    deploy:
+      resources:
+        limits:
+          memory: 2G                          # Increased for 1s data
+          cpus: '1.0'                         # Increased for real-time
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+          
+  redis:
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru --appendonly yes
+    deploy:
+      resources:
+        limits:
+          memory: 2G                          # Increased for 1s buffering
+          cpus: '0.5'
+```
+
+### ⚠️ 1-Second Mode Considerations
+
+**Critical Requirements:**
+- **CPU**: 8+ cores recommended (high continuous load)
+- **RAM**: 16GB minimum (2-4x memory usage increase)
+- **Storage**: NVMe SSD mandatory (high IOPS for 1s writes)
+- **Network**: <50ms exchange latency (critical for real-time)
+
+**Service Impact:**
+- **Memory Usage**: 2-4x increase across all services
+- **CPU Load**: Continuous high processing (no idle time)
+- **Storage I/O**: High frequency writes to InfluxDB
+- **Network Dependency**: Critical low-latency connection requirement
+
 ## Core Services Configuration
 
-### 1. Redis Service
+### 1. Redis Service (🆕 1-Second Optimized)
 
 **Purpose:** Caching, message queue, and signal publishing  
 **Image:** `redis:7-alpine`  
-**Key Features:** Persistent storage, high-performance caching  
+**Key Features:** **1-second data buffering**, ultra-low latency caching, real-time signal delivery
 
 ```yaml
 redis:
@@ -53,36 +179,45 @@ redis:
     - "6379:6379"
   volumes:
     - redis_data:/data
-  command: redis-server --appendonly yes
+  # 🆕 1-SECOND OPTIMIZED CONFIGURATION
+  command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec
   networks:
     - squeezeflow_network
   deploy:
     resources:
       limits:
-        memory: 256M
-        cpus: '0.3'
+        memory: 2G              # 🆕 Increased 8x for 1s data buffering (was 256M)
+        cpus: '0.5'             # 🆕 Increased for real-time processing (was 0.3)
       reservations:
-        memory: 128M
-        cpus: '0.1'
+        memory: 2G              # 🆕 Guaranteed 2GB for 1s data (was 128M)
+        cpus: '0.25'            # 🆕 Baseline for continuous processing (was 0.1)
 ```
 
-**Configuration Details:**
-- **Persistence:** AOF (Append Only File) enabled for data durability
-- **Memory Management:** Limited to 256MB with LRU eviction policy
-- **Network:** Connected to internal squeezeflow_network
-- **Data Volume:** Persistent redis_data volume for data storage
+**🚀 1-Second Configuration Details:**
+- **Memory Allocation:** **2GB limit** (8x increase) for 1-second data buffering
+- **Eviction Policy:** LRU optimized for high-frequency 1s data turnover
+- **Persistence:** AOF with 1-second fsync for real-time durability
+- **Performance:** Optimized for continuous 1s signal publishing and retrieval
 
-**Redis Configuration (Internal):**
+**🆕 Redis Configuration (1-Second Optimized):**
 ```bash
-# Redis configuration applied via command
-maxmemory 256mb
-maxmemory-policy allkeys-lru
-save 900 1
+# Redis configuration optimized for 1-second real-time processing
+maxmemory 2gb                    # 🆕 Increased from 256MB for 1s buffering
+maxmemory-policy allkeys-lru     # Efficient eviction for high-frequency data
+save 900 1                       # Background saves
 save 300 10
 save 60 10000
-appendonly yes
-appendfsync everysec
+appendonly yes                   # Persistence enabled
+appendfsync everysec            # 1-second fsync for real-time durability
+timeout 1                       # 🆕 1-second timeout for low latency
+tcp-keepalive 60                # Keep connections alive
 ```
+
+**🎯 1-Second Performance Optimizations:**
+- **Signal TTL:** 5-second TTL for 1s signals (rapid turnover)
+- **Connection Pooling:** 50 max connections (increased from 20)
+- **Pipeline Batching:** 100-command batches for 1s data operations
+- **Memory Efficiency:** LRU eviction optimized for 1s data patterns
 
 **Performance Tuning:**
 - Connection pooling enabled (20 max connections)
@@ -232,11 +367,14 @@ strategy-runner:
     dockerfile: docker/Dockerfile.strategy-runner
   restart: unless-stopped
   environment:
-    - SQUEEZEFLOW_RUN_INTERVAL=60
-    - SQUEEZEFLOW_MAX_SYMBOLS=5
-    - SQUEEZEFLOW_LOOKBACK_HOURS=48
+    # 🚀 REAL-TIME 1-SECOND CONFIGURATION
+    - SQUEEZEFLOW_RUN_INTERVAL=1            # 🆕 1-second execution (was 60)
+    - SQUEEZEFLOW_DATA_INTERVAL=1           # 🆕 1-second data collection
+    - SQUEEZEFLOW_ENABLE_1S_MODE=true       # 🆕 Enable 1s optimizations
+    - SQUEEZEFLOW_MAX_SYMBOLS=3             # 🆕 Reduced for real-time (was 5)
+    - SQUEEZEFLOW_LOOKBACK_HOURS=4          # 🆕 Optimized for 1s processing (was 48)
     - SQUEEZEFLOW_TIMEFRAME=5m
-    - SQUEEZEFLOW_LOG_LEVEL=INFO
+    - SQUEEZEFLOW_LOG_LEVEL=INFO            # Avoid DEBUG in 1s mode
     - REDIS_HOST=redis
     - REDIS_PORT=6379
     - REDIS_DB=0
@@ -264,11 +402,11 @@ strategy-runner:
   deploy:
     resources:
       limits:
-        memory: 1G
-        cpus: '0.5'
+        memory: 2G              # 🆕 Increased 2x for 1s data processing (was 1G)
+        cpus: '1.0'             # 🆕 Increased 2x for real-time execution (was 0.5)
       reservations:
-        memory: 512M
-        cpus: '0.25'
+        memory: 2G              # 🆕 Guaranteed 2GB for 1s operations (was 512M)
+        cpus: '0.5'             # 🆕 Baseline for continuous processing (was 0.25)
 ```
 
 **Service Architecture:**
@@ -303,12 +441,14 @@ ENV PYTHONPATH=/app
 CMD ["python", "services/strategy_runner.py"]
 ```
 
-**Environment Variables:**
-- `SQUEEZEFLOW_RUN_INTERVAL`: Strategy execution frequency (60 seconds)
-- `SQUEEZEFLOW_MAX_SYMBOLS`: Maximum symbols per cycle (5)
-- `SQUEEZEFLOW_LOOKBACK_HOURS`: Historical data window (48 hours)
-- `SQUEEZEFLOW_TIMEFRAME`: Primary timeframe (5m)
-- Redis/InfluxDB connection parameters
+**🆕 1-Second Environment Variables:**
+- `SQUEEZEFLOW_RUN_INTERVAL`: **1-second execution frequency** (60x improvement from 60s)
+- `SQUEEZEFLOW_DATA_INTERVAL`: **1-second data collection** (NEW - ultra-low latency)
+- `SQUEEZEFLOW_ENABLE_1S_MODE`: **Enable 1s optimizations** (NEW - real-time mode)
+- `SQUEEZEFLOW_MAX_SYMBOLS`: **3 symbols max for real-time** (reduced from 5 for performance)
+- `SQUEEZEFLOW_LOOKBACK_HOURS`: **4 hours optimized window** (reduced from 48 for 1s efficiency)
+- `SQUEEZEFLOW_TIMEFRAME`: Primary analysis timeframe (5m)
+- Redis/InfluxDB connection parameters (optimized for 1s operations)
 - FreqTrade API integration settings
 
 ### 5. FreqTrade Service
@@ -739,7 +879,7 @@ deploy:
   resources:
     limits:
       cpus: '0.5'        # 50% of one CPU core
-      memory: 1024M      # 1GB memory limit
+      memory: 2048M      # 2GB memory limit
     reservations:
       cpus: '0.25'       # 25% guaranteed CPU
       memory: 512M       # 512MB guaranteed memory

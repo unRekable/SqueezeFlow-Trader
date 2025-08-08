@@ -262,10 +262,88 @@ class DataPipeline:
         
         return result
     
+    async def get_complete_dataset_async(self, symbol: str, start_time: datetime, 
+                                       end_time: datetime, timeframe: str = '5m',
+                                       prefer_1s_data: bool = True, max_lookback_minutes: int = 30) -> Dict:
+        """
+        Get complete dataset for strategy analysis with 1-second data support
+        
+        Args:
+            symbol: Trading symbol
+            start_time: Start datetime
+            end_time: End datetime
+            timeframe: Target timeframe for aggregation
+            prefer_1s_data: Try to use 1-second data first
+            max_lookback_minutes: Limit lookback for real-time efficiency
+            
+        Returns:
+            Dict with all required data for strategy
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Get markets for symbol
+        markets = self.discover_markets_for_symbol(symbol)
+        all_markets = markets.get('spot', []) + markets.get('perp', [])
+        
+        if not all_markets:
+            logger.warning(f"No markets found for symbol {symbol}")
+            return self._empty_dataset(symbol, timeframe, start_time, end_time)
+        
+        # Try 1-second data first if preferred and for real-time processing
+        if prefer_1s_data and (end_time - start_time).total_seconds() <= max_lookback_minutes * 60:
+            try:
+                ohlcv_df, combined_volume_df = await self.influx_client.get_1s_data_with_aggregation(
+                    markets=all_markets,
+                    start_time=start_time,
+                    end_time=end_time,
+                    target_timeframe=timeframe,
+                    max_lookback_minutes=max_lookback_minutes
+                )
+                
+                if not ohlcv_df.empty and not combined_volume_df.empty:
+                    # Split volume data by market type
+                    spot_df, futures_df = self._split_volume_by_market_type(
+                        combined_volume_df, markets
+                    )
+                    
+                    # Calculate CVD data
+                    cvd_data = self.calculate_cvd_data(spot_df, futures_df)
+                    
+                    logger.info(f"Successfully loaded 1s data for {symbol} ({timeframe}): {len(ohlcv_df)} bars")
+                    
+                    return {
+                        'symbol': symbol,
+                        'timeframe': timeframe,
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'ohlcv': ohlcv_df,
+                        'spot_volume': spot_df,
+                        'futures_volume': futures_df,
+                        'spot_cvd': cvd_data['spot_cvd'],
+                        'futures_cvd': cvd_data['futures_cvd'],
+                        'cvd_divergence': cvd_data['cvd_divergence'],
+                        'markets': markets,
+                        'data_source': '1s_aggregated',
+                        'metadata': {
+                            'spot_markets_count': len(markets.get('spot', [])),
+                            'futures_markets_count': len(markets.get('perp', [])),
+                            'data_points': len(ohlcv_df),
+                            'lookback_limited': True
+                        }
+                    }
+                    
+            except Exception as e:
+                logger.warning(f"1s data loading failed for {symbol}, falling back to regular data: {e}")
+        
+        # Fallback to regular data loading
+        logger.debug(f"Loading regular data for {symbol}")
+        return self.get_complete_dataset(symbol, start_time, end_time, timeframe)
+    
     def get_complete_dataset(self, symbol: str, start_time: datetime, 
                             end_time: datetime, timeframe: str = '5m') -> Dict:
         """
-        Get complete dataset for strategy analysis
+        Get complete dataset for strategy analysis (synchronous fallback)
         
         Args:
             symbol: Trading symbol
@@ -298,10 +376,12 @@ class DataPipeline:
             'futures_cvd': cvd_data['futures_cvd'],
             'cvd_divergence': cvd_data['cvd_divergence'],
             'markets': markets,
+            'data_source': 'regular',
             'metadata': {
                 'spot_markets_count': len(markets.get('spot', [])),
                 'futures_markets_count': len(markets.get('perp', [])),
-                'data_points': len(ohlcv_df)
+                'data_points': len(ohlcv_df),
+                'lookback_limited': False
             }
         }
     
@@ -449,6 +529,118 @@ class DataPipeline:
         
         return pd.DataFrame()
     
+    def _split_volume_by_market_type(self, combined_volume_df: pd.DataFrame, 
+                                   markets: Dict[str, List[str]]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Split combined volume data by market type when using 1s aggregated data
+        
+        Args:
+            combined_volume_df: Combined volume data from all markets
+            markets: Market classification dict
+            
+        Returns:
+            Tuple of (spot_df, futures_df)
+        """
+        # For 1s aggregated data, we get totals across all markets
+        # We need to estimate the split based on market counts
+        spot_markets = markets.get('spot', [])
+        futures_markets = markets.get('perp', [])
+        
+        total_markets = len(spot_markets) + len(futures_markets)
+        
+        if total_markets == 0:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Estimate proportional split (this is approximate for CVD calculation)
+        spot_ratio = len(spot_markets) / total_markets if total_markets > 0 else 0.5
+        futures_ratio = len(futures_markets) / total_markets if total_markets > 0 else 0.5
+        
+        spot_df = combined_volume_df.copy()
+        futures_df = combined_volume_df.copy()
+        
+        # Rename columns and apply ratios
+        if not spot_df.empty:
+            column_mapping = {
+                'total_vbuy': 'total_vbuy_spot',
+                'total_vsell': 'total_vsell_spot', 
+                'total_cbuy': 'total_cbuy_spot',
+                'total_csell': 'total_csell_spot',
+                'total_lbuy': 'total_lbuy_spot',
+                'total_lsell': 'total_lsell_spot'
+            }
+            spot_df = spot_df.rename(columns=column_mapping)
+            
+            # Apply spot ratio
+            for col in spot_df.columns:
+                if col.endswith('_spot'):
+                    spot_df[col] *= spot_ratio
+        
+        if not futures_df.empty:
+            column_mapping = {
+                'total_vbuy': 'total_vbuy_futures',
+                'total_vsell': 'total_vsell_futures',
+                'total_cbuy': 'total_cbuy_futures', 
+                'total_csell': 'total_csell_futures',
+                'total_lbuy': 'total_lbuy_futures',
+                'total_lsell': 'total_lsell_futures'
+            }
+            futures_df = futures_df.rename(columns=column_mapping)
+            
+            # Apply futures ratio
+            for col in futures_df.columns:
+                if col.endswith('_futures'):
+                    futures_df[col] *= futures_ratio
+        
+        return spot_df, futures_df
+    
+    def _empty_dataset(self, symbol: str, timeframe: str, start_time: datetime, end_time: datetime) -> Dict:
+        """Return empty dataset structure"""
+        return {
+            'symbol': symbol,
+            'timeframe': timeframe,
+            'start_time': start_time,
+            'end_time': end_time,
+            'ohlcv': pd.DataFrame(),
+            'spot_volume': pd.DataFrame(),
+            'futures_volume': pd.DataFrame(),
+            'spot_cvd': pd.Series(dtype=float),
+            'futures_cvd': pd.Series(dtype=float),
+            'cvd_divergence': pd.Series(dtype=float),
+            'markets': {'spot': [], 'perp': []},
+            'data_source': 'empty',
+            'metadata': {
+                'spot_markets_count': 0,
+                'futures_markets_count': 0,
+                'data_points': 0
+            }
+        }
+    
+    def get_complete_dataset_with_1s_support(self, symbol: str, start_time: datetime,
+                                            end_time: datetime, timeframe: str = '5m') -> Dict:
+        """
+        Synchronous wrapper for 1s data support with fallback
+        """
+        import asyncio
+        
+        # Limit lookback for real-time processing  
+        max_lookback_minutes = 30
+        if (end_time - start_time).total_seconds() > max_lookback_minutes * 60:
+            # Use regular method for large time ranges
+            return self.get_complete_dataset(symbol, start_time, end_time, timeframe)
+        
+        try:
+            # Try to use async method with 1s data
+            return asyncio.run(self.get_complete_dataset_async(
+                symbol, start_time, end_time, timeframe, 
+                prefer_1s_data=True, max_lookback_minutes=max_lookback_minutes
+            ))
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Async 1s data loading failed for {symbol}, using regular data: {e}")
+            # Fallback to regular synchronous method
+            return self.get_complete_dataset(symbol, start_time, end_time, timeframe)
+
     def clear_cache(self):
         """Clear discovery caches"""
         self._symbol_cache.clear()

@@ -80,7 +80,7 @@ class StrategyRunner:
 ```python
 @dataclass
 class ServiceConfig:
-    run_interval_seconds: int = 60          # Strategy execution cycle
+    run_interval_seconds: int = 1           # Strategy execution cycle
     max_symbols_per_cycle: int = 10         # Concurrent symbol processing
     data_lookback_hours: int = 48           # Historical data window
     default_timeframe: str = "5m"           # Primary analysis timeframe
@@ -91,7 +91,7 @@ class ServiceConfig:
 #### 1.4 Execution Cycle
 ```python
 async def _run_strategy_cycle(self, symbols: List[str]):
-    """60-second execution cycle"""
+    """1-second execution cycle"""
     
     for symbol in symbols:
         # 1. Load real-time data (48h window)
@@ -697,7 +697,7 @@ class ServiceConfig:
     """Centralized service configuration"""
     
     # Service execution settings
-    run_interval_seconds: int = 60
+    run_interval_seconds: int = 1
     max_symbols_per_cycle: int = 10
     enable_parallel_processing: bool = True
     
@@ -899,7 +899,7 @@ services:
   strategy-runner:
     container_name: squeezeflow-strategy-runner
     environment:
-      - SQUEEZEFLOW_RUN_INTERVAL=60
+      - SQUEEZEFLOW_RUN_INTERVAL=1
       - SQUEEZEFLOW_MAX_SYMBOLS=5
       - REDIS_HOST=redis
       - INFLUX_HOST=aggr-influx
