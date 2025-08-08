@@ -459,6 +459,19 @@ class BacktestEngine:
                     futures_cvd=order['futures_cvd']
                 )
             
+            # Get CVD baselines and entry analysis for position
+            spot_cvd_entry = None
+            futures_cvd_entry = None
+            if 'spot_cvd' in dataset and 'futures_cvd' in dataset:
+                spot_cvd = dataset['spot_cvd']
+                futures_cvd = dataset['futures_cvd']
+                if not spot_cvd.empty and not futures_cvd.empty:
+                    spot_cvd_entry = float(spot_cvd.iloc[-1])
+                    futures_cvd_entry = float(futures_cvd.iloc[-1])
+            
+            # Get entry analysis from order (scoring results)
+            entry_analysis = order.get('scoring_result', {})
+            
             # Execute through portfolio with leverage and tracking info
             success = False
             if side == 'BUY':
@@ -468,7 +481,10 @@ class BacktestEngine:
                     price=price,
                     timestamp=timestamp,
                     trade_id=trade_id,
-                    signal_id=signal_id
+                    signal_id=signal_id,
+                    entry_analysis=entry_analysis,
+                    spot_cvd_entry=spot_cvd_entry,
+                    futures_cvd_entry=futures_cvd_entry
                 )
             elif side == 'SELL':
                 success = self.portfolio.open_short_position(
@@ -477,7 +493,10 @@ class BacktestEngine:
                     price=price,
                     timestamp=timestamp,
                     trade_id=trade_id,
-                    signal_id=signal_id
+                    signal_id=signal_id,
+                    entry_analysis=entry_analysis,
+                    spot_cvd_entry=spot_cvd_entry,
+                    futures_cvd_entry=futures_cvd_entry
                 )
             else:
                 self.logger.error(f"❌ Unknown order side: {side}")

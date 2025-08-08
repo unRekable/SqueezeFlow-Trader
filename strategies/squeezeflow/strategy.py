@@ -52,6 +52,9 @@ class SqueezeFlowStrategy(BaseStrategy):
         # Initialize configuration
         self.config = config or SqueezeFlowConfig()
         
+        # Initialize logging first
+        self.logger = logging.getLogger(f"squeezeflow.{self.name}")
+        
         # Initialize all 5 phase components
         self.phase1 = ContextAssessment(context_timeframes=self.config.context_timeframes)
         self.phase2 = DivergenceDetection(divergence_timeframes=self.config.divergence_timeframes)
@@ -60,13 +63,10 @@ class SqueezeFlowStrategy(BaseStrategy):
             scoring_weights=self.config.scoring_weights,
             min_entry_score=self.config.min_entry_score
         )
-        self.phase5 = ExitManagement()  # CVD baseline manager will be injected later
+        self.phase5 = ExitManagement(logger=self.logger)  # CVD baseline manager will be injected later
         
         # CVD baseline manager for live trading (optional)
         self.cvd_baseline_manager = None
-        
-        # Initialize logging
-        self.logger = logging.getLogger(f"squeezeflow.{self.name}")
         
         # Track strategy state
         self.last_analysis = None
@@ -80,7 +80,7 @@ class SqueezeFlowStrategy(BaseStrategy):
         """
         self.cvd_baseline_manager = cvd_baseline_manager
         # Pass to Phase 5 exit management
-        self.phase5 = ExitManagement(cvd_baseline_manager=cvd_baseline_manager)
+        self.phase5 = ExitManagement(cvd_baseline_manager=cvd_baseline_manager, logger=self.logger)
         
     def process(self, dataset: Dict[str, Any], portfolio_state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -234,8 +234,11 @@ class SqueezeFlowStrategy(BaseStrategy):
         
         for position in positions:
             # Phase 5: Exit Management
+            # Use entry_analysis from position if available, otherwise use empty dict
+            entry_analysis = position.get('entry_analysis', {})
+            
             exit_result = self.phase5.manage_exits(
-                dataset, position, self.last_analysis or {}
+                dataset, position, entry_analysis
             )
             results['phase_results'][f'phase5_exit_{position.get("id", "unknown")}'] = exit_result
             
@@ -246,10 +249,17 @@ class SqueezeFlowStrategy(BaseStrategy):
                     results['orders'].append(exit_order)
                     
                     self.logger.info(
-                        f"{dataset.get('symbol')}: Exit signal - "
+                        f"🚪 {dataset.get('symbol')}: EXIT SIGNAL GENERATED - "
                         f"Reason: {exit_result.get('exit_reasoning', 'Unknown')}, "
-                        f"Position: {position.get('side', 'UNKNOWN')} {position.get('quantity', 0)}"
+                        f"Position: {position.get('side', 'UNKNOWN')} {position.get('quantity', 0)}, "
+                        f"Entry: ${position.get('entry_price', 0):.2f}"
                     )
+            else:
+                # Debug logging when exit not triggered
+                self.logger.debug(
+                    f"{dataset.get('symbol')}: No exit - Position {position.get('side')} holds, "
+                    f"health: {exit_result.get('position_health', {}).get('status', 'UNKNOWN')}"
+                )
         
         return results
     

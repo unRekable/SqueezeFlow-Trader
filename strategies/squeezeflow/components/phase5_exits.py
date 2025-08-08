@@ -33,14 +33,19 @@ class ExitManagement:
     - Monitor larger timeframe validity
     """
     
-    def __init__(self, cvd_baseline_manager: Optional['CVDBaselineManager'] = None):
+    def __init__(self, cvd_baseline_manager: Optional['CVDBaselineManager'] = None, logger=None):
         """
         Initialize exit management component
         
         Args:
             cvd_baseline_manager: Optional CVD baseline manager for live trading
+            logger: Optional logger for debug output
         """
         self.cvd_baseline_manager = cvd_baseline_manager
+        self.logger = logger
+        if not self.logger:
+            import logging
+            self.logger = logging.getLogger(__name__)
         
     def manage_exits(self, dataset: Dict[str, Any], position: Dict[str, Any], 
                     entry_analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,6 +112,13 @@ class ExitManagement:
             exit_reasoning = self._generate_exit_reasoning(
                 flow_reversal, range_break, cvd_invalidation, structure_break
             )
+            
+            # Debug logging for exit decision
+            if should_exit:
+                self.logger.info(f"EXIT SIGNAL: {exit_reasoning}")
+                self.logger.debug(f"Exit conditions - Flow: {flow_reversal['detected']}, Range: {range_break['detected']}, CVD: {cvd_invalidation['detected']}, Structure: {structure_break['detected']}")
+            else:
+                self.logger.debug(f"No exit - Position {position.get('side')} at ${position.get('entry_price', 0):.2f}, current conditions valid")
             
             return {
                 'phase': 'EXIT_MANAGEMENT',
@@ -222,7 +234,8 @@ class ExitManagement:
         # Define entry range (approximate from entry)
         entry_range_size = entry_price * 0.005  # 0.5% range
         
-        if position_side == 'BUY':
+        # FIX: Handle both 'BUY' and 'LONG' for position side
+        if position_side in ['BUY', 'LONG']:
             # For longs, check if price breaks below entry range
             range_low = entry_price - entry_range_size
             current_price = ohlcv[close_col].iloc[-1]
@@ -231,7 +244,11 @@ class ExitManagement:
             detected = current_price < range_low or recent_low < range_low * 0.995
             break_type = 'BELOW_ENTRY' if detected else 'NONE'
             
-        elif position_side == 'SELL':
+            # Debug logging
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"Range break check (LONG): current={current_price:.2f}, range_low={range_low:.2f}, detected={detected}")
+            
+        elif position_side in ['SELL', 'SHORT']:  # FIX: Handle both 'SELL' and 'SHORT'
             # For shorts, check if price breaks above entry range
             range_high = entry_price + entry_range_size
             current_price = ohlcv[close_col].iloc[-1]
@@ -240,9 +257,15 @@ class ExitManagement:
             detected = current_price > range_high or recent_high > range_high * 1.005
             break_type = 'ABOVE_ENTRY' if detected else 'NONE'
             
+            # Debug logging
+            if hasattr(self, 'logger'):
+                self.logger.debug(f"Range break check (SHORT): current={current_price:.2f}, range_high={range_high:.2f}, detected={detected}")
+            
         else:
             detected = False
             break_type = 'NONE'
+            if hasattr(self, 'logger'):
+                self.logger.warning(f"Unknown position side: {position_side}")
             
         return {
             'detected': detected,
@@ -256,7 +279,7 @@ class ExitManagement:
         """
         Check if CVD trend no longer supports position
         
-        Uses CVD baseline manager if available, otherwise falls back to approximation
+        Uses CVD baseline manager if available, otherwise uses stored entry baselines
         """
         
         if len(spot_cvd) < 5:
@@ -270,12 +293,19 @@ class ExitManagement:
         baseline_data = self._get_cvd_baseline(position)
         
         if baseline_data:
-            # Fix: Safe access with defaults to prevent KeyError
+            # Use baseline manager data
             spot_change_since_entry = current_spot_cvd - baseline_data.get('spot_cvd', current_spot_cvd)
             futures_change_since_entry = current_futures_cvd - baseline_data.get('futures_cvd', current_futures_cvd)
+            baseline_source = 'baseline_manager'
+            
+        elif 'spot_cvd_entry' in position and 'futures_cvd_entry' in position:
+            # Use stored entry baselines (preferred)
+            spot_change_since_entry = current_spot_cvd - position['spot_cvd_entry']
+            futures_change_since_entry = current_futures_cvd - position['futures_cvd_entry']
+            baseline_source = 'stored_baseline'
             
         else:
-            # Fallback to approximation (existing logic)
+            # Fallback to approximation (least preferred)
             entry_index = position.get('entry_index', -20)
             
             # Validate entry_index bounds
@@ -288,14 +318,18 @@ class ExitManagement:
                 
             spot_change_since_entry = current_spot_cvd - spot_cvd.iloc[entry_index]
             futures_change_since_entry = current_futures_cvd - futures_cvd.iloc[entry_index]
+            baseline_source = 'approximation'
         
-        # Check if CVD has reversed against position
-        if position_side == 'BUY':
+        # Debug logging
+        self.logger.debug(f"CVD check ({baseline_source}): spot_change={spot_change_since_entry:.0f}, futures_change={futures_change_since_entry:.0f}")
+        
+        # Check if CVD has reversed against position - FIX: Handle both LONG/BUY and SHORT/SELL
+        if position_side in ['BUY', 'LONG']:
             # For longs, CVD should be increasing
             cvd_reversed = spot_change_since_entry < 0 and futures_change_since_entry < 0
             invalidation_type = 'CVD_DECLINING' if cvd_reversed else 'NONE'
             
-        elif position_side == 'SELL':
+        elif position_side in ['SELL', 'SHORT']:
             # For shorts, CVD should be decreasing
             cvd_reversed = spot_change_since_entry > 0 and futures_change_since_entry > 0
             invalidation_type = 'CVD_RISING' if cvd_reversed else 'NONE'

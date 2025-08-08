@@ -28,6 +28,9 @@ class Position:
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     closed: bool = False  # Track if position is closed
+    entry_analysis: Optional[Dict] = None  # Store entry analysis for exit checks
+    spot_cvd_entry: Optional[float] = None  # CVD baseline at entry
+    futures_cvd_entry: Optional[float] = None  # CVD baseline at entry
 
 
 class Portfolio:
@@ -88,7 +91,10 @@ class Portfolio:
             'trade_id': position.trade_id,
             'signal_id': position.signal_id,
             'unrealized_pnl': position.unrealized_pnl,
-            'fees_paid': position.fees_paid
+            'fees_paid': position.fees_paid,
+            'entry_analysis': position.entry_analysis,
+            'spot_cvd_entry': position.spot_cvd_entry,
+            'futures_cvd_entry': position.futures_cvd_entry
         }
     
     def can_open_position(self, symbol: str, quantity: float, price: float) -> bool:
@@ -114,7 +120,8 @@ class Portfolio:
     def open_long_position(self, symbol: str, quantity: float, price: float, 
                           timestamp: datetime, stop_loss: Optional[float] = None,
                           take_profit: Optional[float] = None, trade_id: Optional[int] = None,
-                          signal_id: Optional[str] = None) -> bool:
+                          signal_id: Optional[str] = None, entry_analysis: Optional[Dict] = None,
+                          spot_cvd_entry: Optional[float] = None, futures_cvd_entry: Optional[float] = None) -> bool:
         """Open a long position"""
         
         if not self.can_open_position(symbol, quantity, price):
@@ -140,7 +147,10 @@ class Portfolio:
             signal_id=signal_id,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            fees_paid=fees
+            fees_paid=fees,
+            entry_analysis=entry_analysis,
+            spot_cvd_entry=spot_cvd_entry,
+            futures_cvd_entry=futures_cvd_entry
         )
         
         # Store position
@@ -163,7 +173,8 @@ class Portfolio:
     def open_short_position(self, symbol: str, quantity: float, price: float,
                            timestamp: datetime, stop_loss: Optional[float] = None,
                            take_profit: Optional[float] = None, trade_id: Optional[int] = None,
-                           signal_id: Optional[str] = None) -> bool:
+                           signal_id: Optional[str] = None, entry_analysis: Optional[Dict] = None,
+                           spot_cvd_entry: Optional[float] = None, futures_cvd_entry: Optional[float] = None) -> bool:
         """Open a short position"""
         
         if not self.can_open_position(symbol, quantity, price):
@@ -190,7 +201,10 @@ class Portfolio:
             signal_id=signal_id,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            fees_paid=fees
+            fees_paid=fees,
+            entry_analysis=entry_analysis,
+            spot_cvd_entry=spot_cvd_entry,
+            futures_cvd_entry=futures_cvd_entry
         )
         
         # Store position
