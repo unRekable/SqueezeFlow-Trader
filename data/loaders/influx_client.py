@@ -440,12 +440,15 @@ class OptimizedInfluxClient:
             
             # Note: We'll modify the query template to use market_conditions instead of regex
             
-            # Use pre-compiled query template
-            query = self.query_templates['ohlcv_data'].format(
+            # Use appropriate query template based on timeframe
+            # 1-second data is stored in trades_1s measurement
+            template_key = 'ohlcv_1s_data' if timeframe == '1s' else 'ohlcv_data'
+            query = self.query_templates[template_key].format(
                 timeframe=timeframe,
                 market_conditions=market_conditions,
                 start_time=start_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                end_time=end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                end_time=end_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                group_by_interval=timeframe
             )
             
             # Add query optimization hints
@@ -887,24 +890,25 @@ def create_optimized_influx_client(config: Dict) -> OptimizedInfluxClient:
     import os
     
     # Smart host detection - fix for DNS resolution issues
-    default_host = 'localhost'
+    requested_host = config.get('influx_host', 'localhost')
+    final_host = requested_host
     
     # Check if we're in Docker environment
     if os.path.exists('/.dockerenv'):
         # Inside Docker container - use service name
-        default_host = 'aggr-influx'
-    elif os.getenv('DOCKER_HOST'):
-        # Docker Desktop environment - use localhost
-        default_host = 'localhost'
-    elif config.get('influx_host') == 'aggr-influx':
-        # Force localhost if aggr-influx specified but we're not in Docker
-        try:
-            import socket
-            socket.gethostbyname('aggr-influx')
-            default_host = 'aggr-influx'  # DNS resolves, use it
-        except socket.gaierror:
-            default_host = 'localhost'  # DNS fails, fallback to localhost
-            print(f"⚠️  DNS resolution failed for 'aggr-influx', using localhost instead")
+        if requested_host in ['localhost', '127.0.0.1']:
+            final_host = 'aggr-influx'
+    else:
+        # Not in Docker - check if aggr-influx resolves
+        if requested_host == 'aggr-influx':
+            try:
+                import socket
+                socket.gethostbyname('aggr-influx')
+                # DNS resolves, keep using it
+            except socket.gaierror:
+                # DNS fails, fallback to localhost
+                final_host = 'localhost'
+                print(f"⚠️  DNS resolution failed for 'aggr-influx', using localhost instead")
     
     optimization_config = QueryOptimization(
         enable_query_cache=config.get('enable_query_cache', True),
@@ -915,8 +919,6 @@ def create_optimized_influx_client(config: Dict) -> OptimizedInfluxClient:
         connection_pool_size=config.get('connection_pool_size', 25),
         query_timeout_seconds=config.get('query_timeout_seconds', 300)  # Extended timeout for backtests
     )
-    
-    final_host = config.get('influx_host', default_host)
     
     return OptimizedInfluxClient(
         host=final_host,
