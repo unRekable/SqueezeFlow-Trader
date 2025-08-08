@@ -383,7 +383,8 @@ class BacktestEngine:
         
         if signal_type == 'EXIT':
             # This is an exit order - close the matching position
-            self.logger.info(f"🚪 Processing EXIT order for {symbol}")
+            position_id = order.get('position_id', 'unknown')
+            self.logger.info(f"🚪 Processing EXIT order for {symbol} (position_id: {position_id})")
             
             # Try different methods to find and close position
             close_result = None
@@ -410,6 +411,17 @@ class BacktestEngine:
                 # If exit order is 'BUY', we're closing a SHORT position
                 # If exit order is 'SELL', we're closing a LONG position
                 position_side = 'SHORT' if side == 'BUY' else 'LONG'
+                
+                # Debug: Check current positions before trying to close
+                current_positions = self.portfolio.get_state()['positions']
+                matching = [p for p in current_positions if p['symbol'] == symbol]
+                if not matching:
+                    self.logger.debug(f"No positions exist for {symbol} to close")
+                else:
+                    self.logger.debug(f"Found {len(matching)} positions for {symbol}:")
+                    for pos in matching:
+                        self.logger.debug(f"  Position: side={pos.get('side')}, qty={pos.get('quantity')}, id={pos.get('id')}")
+                
                 close_result = self.portfolio.close_matching_position(
                     symbol=symbol,
                     side=position_side,

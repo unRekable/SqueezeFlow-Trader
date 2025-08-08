@@ -70,6 +70,8 @@ class SqueezeFlowStrategy(BaseStrategy):
         
         # Track strategy state
         self.last_analysis = None
+        # Track positions we've already signaled exits for (to prevent duplicates)
+        self.exit_signals_sent = set()
         
     def set_cvd_baseline_manager(self, cvd_baseline_manager):
         """
@@ -177,6 +179,11 @@ class SqueezeFlowStrategy(BaseStrategy):
                     )
                     results['orders'].extend(orders)
                     
+                    # Clear exit signals tracking when opening new positions
+                    # (old position IDs are no longer relevant)
+                    if orders:
+                        self.exit_signals_sent.clear()
+                    
                     # Enhanced logging for debugging
                     setup_type = divergence_result.get('setup_type', 'UNKNOWN')
                     market_bias = context_result.get('market_bias', 'NEUTRAL')
@@ -226,13 +233,27 @@ class SqueezeFlowStrategy(BaseStrategy):
     def _get_symbol_positions(self, portfolio_state: Dict[str, Any], symbol: str) -> List[Dict[str, Any]]:
         """Get existing positions for the symbol"""
         positions = portfolio_state.get('positions', [])
-        return [pos for pos in positions if pos.get('symbol') == symbol and pos.get('quantity', 0) != 0]
+        # Only return positions with actual quantity (not closed positions)
+        active_positions = [
+            pos for pos in positions 
+            if pos.get('symbol') == symbol 
+            and pos.get('quantity', 0) != 0
+            and not pos.get('closed', False)  # Skip closed positions
+        ]
+        return active_positions
     
     def _handle_existing_positions(self, results: Dict[str, Any], dataset: Dict[str, Any], 
                                  positions: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
         """Handle exit management for existing positions"""
         
         for position in positions:
+            position_id = position.get('id', position.get('trade_id', 'unknown'))
+            
+            # Skip if we've already sent an exit signal for this position
+            if position_id in self.exit_signals_sent:
+                self.logger.debug(f"Already sent exit signal for position {position_id}, skipping")
+                continue
+                
             # Phase 5: Exit Management
             # Use entry_analysis from position if available, otherwise use empty dict
             entry_analysis = position.get('entry_analysis', {})
@@ -240,13 +261,15 @@ class SqueezeFlowStrategy(BaseStrategy):
             exit_result = self.phase5.manage_exits(
                 dataset, position, entry_analysis
             )
-            results['phase_results'][f'phase5_exit_{position.get("id", "unknown")}'] = exit_result
+            results['phase_results'][f'phase5_exit_{position_id}'] = exit_result
             
             if exit_result.get('should_exit', False):
                 # Generate exit order
                 exit_order = self._generate_exit_order(position, dataset, exit_result)
                 if exit_order:
                     results['orders'].append(exit_order)
+                    # Mark this position as having an exit signal sent
+                    self.exit_signals_sent.add(position_id)
                     
                     self.logger.info(
                         f"🚪 {dataset.get('symbol')}: EXIT SIGNAL GENERATED - "
@@ -373,9 +396,13 @@ class SqueezeFlowStrategy(BaseStrategy):
                 return None
             
             # Generate opposite side order to close position
-            exit_side = 'SELL' if position_side == 'BUY' else 'BUY'
+            # Handle both LONG/BUY and SHORT/SELL formats
+            if position_side in ['BUY', 'LONG']:
+                exit_side = 'SELL'  # Sell to close long
+            else:  # SHORT or SELL
+                exit_side = 'BUY'   # Buy to close short
             
-            return {
+            exit_order = {
                 'symbol': symbol,
                 'side': exit_side,
                 'quantity': position_quantity,
@@ -387,6 +414,12 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'position_id': position.get('id'),
                 'exit_type': 'DYNAMIC'  # Mark as dynamic exit (not fixed stop/target)
             }
+            
+            # Include trade_id if available for more reliable position matching
+            if position.get('trade_id'):
+                exit_order['trade_id'] = position.get('trade_id')
+                
+            return exit_order
             
         except Exception as e:
             self.logger.error(f"Error generating exit order: {str(e)}")

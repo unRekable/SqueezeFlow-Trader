@@ -79,6 +79,11 @@ class ExitManagement:
             
             if spot_cvd.empty or ohlcv.empty or not position:
                 return self._no_exit_signal()
+            
+            # Check if position has valid quantity
+            if position.get('quantity', 0) == 0:
+                self.logger.debug("Position has zero quantity, skipping exit check")
+                return self._no_exit_signal()
                 
             # Check for flow reversal
             flow_reversal = self._check_flow_reversal(
