@@ -7,7 +7,7 @@ Coordinates loaders and processors for clean data delivery to strategies
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from .loaders.influx_client import OptimizedInfluxClient
 from .loaders.symbol_discovery import SymbolDiscovery
@@ -835,6 +835,53 @@ class DataPipeline:
             logger.warning(f"Async 1s data loading failed for {symbol}, using regular data: {e}")
             # Fallback to regular synchronous method
             return self.get_complete_dataset(symbol, start_time, end_time, timeframe)
+
+    def get_chunking_recommendations(self, timeframe: str, date_range_days: float) -> Dict[str, Union[int, bool, str]]:
+        """
+        Get chunking recommendations based on timeframe and data range.
+        
+        Args:
+            timeframe: Data timeframe ('1s', '5m', '1h', etc.)
+            date_range_days: Number of days in the data range
+            
+        Returns:
+            Dict with chunking recommendations for Phase 1.3
+        """
+        recommendations = {
+            'should_chunk': False,
+            'chunk_hours': 72,  # Default for regular timeframes
+            'estimated_chunks': 1,
+            'reasoning': '',
+            'memory_efficient': True,
+            'retry_recommended': False
+        }
+        
+        if timeframe == '1s':
+            # 1s data: chunk if > 2.4 hours (0.1 days)
+            if date_range_days > 0.1:
+                recommendations.update({
+                    'should_chunk': True,
+                    'chunk_hours': 2,  # 2-hour chunks for 1s data
+                    'estimated_chunks': int((date_range_days * 24) / 2) + 1,
+                    'reasoning': 'Large 1s dataset requires 2h chunking to prevent timeout/crash',
+                    'retry_recommended': True
+                })
+            else:
+                recommendations['reasoning'] = 'Small 1s dataset, direct loading recommended'
+        else:
+            # Regular timeframes: chunk if > 3 days
+            if date_range_days > 3:
+                recommendations.update({
+                    'should_chunk': True,
+                    'chunk_hours': 72,  # 3-day chunks for regular data
+                    'estimated_chunks': int(date_range_days / 3) + 1,
+                    'reasoning': f'Large {timeframe} dataset benefits from 3-day chunking',
+                    'retry_recommended': False
+                })
+            else:
+                recommendations['reasoning'] = f'Small {timeframe} dataset, direct loading sufficient'
+        
+        return recommendations
 
     def clear_cache(self):
         """Clear discovery caches"""

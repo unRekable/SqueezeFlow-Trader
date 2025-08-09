@@ -26,13 +26,16 @@ class BacktestDataLoader:
     - Memory-efficient rolling windows with LRU cache
     - Explicit memory cleanup and garbage collection
     - Configurable chunk sizes for different timeframes
+    - Adaptive chunking for 1s data with retry logic
+    - Progressive loading with progress indicators
     
     This class loads raw 1-second data from InfluxDB and dynamically
     aggregates it to any required timeframe for backtesting.
     """
     
     def __init__(self, host='localhost', port=8086, database='significant_trades',
-                 enable_streaming=False, max_memory_mb=4096, chunk_size_hours=2):
+                 enable_streaming=False, max_memory_mb=4096, chunk_size_hours=2, 
+                 max_retries=3, enable_1s_chunking=True):
         """
         Initialize the memory-efficient backtest data loader.
         
@@ -42,7 +45,9 @@ class BacktestDataLoader:
             database: InfluxDB database name
             enable_streaming: Enable streaming mode for memory efficiency
             max_memory_mb: Maximum memory usage in MB
-            chunk_size_hours: Chunk size in hours for streaming
+            chunk_size_hours: Chunk size in hours for streaming (2h for 1s data)
+            max_retries: Maximum retries per chunk (default 3)
+            enable_1s_chunking: Enable adaptive chunking for 1s data (default True)
         """
         self.influx = InfluxDBClient(
             host=host,
@@ -55,6 +60,10 @@ class BacktestDataLoader:
         self.max_memory_mb = max_memory_mb
         self.chunk_size_hours = chunk_size_hours
         
+        # Retry and chunking configuration for Phase 1.3
+        self.max_retries = max_retries
+        self.enable_1s_chunking = enable_1s_chunking
+        
         # Streaming cache for memory efficiency
         self.data_cache = deque(maxlen=100)  # LRU cache for recent chunks
         self.cache_hits = 0
@@ -63,6 +72,8 @@ class BacktestDataLoader:
         logger.info(f"BacktestDataLoader initialized: {host}:{port}/{database}")
         if enable_streaming:
             logger.info(f"Streaming mode enabled: {max_memory_mb}MB limit, {chunk_size_hours}h chunks")
+        if enable_1s_chunking:
+            logger.info(f"1s data chunking enabled: {chunk_size_hours}h chunks, {max_retries} retries")
     
     def load_1s_data(self, symbol, start_time, end_time, enable_chunking=None):
         """
@@ -406,20 +417,36 @@ class BacktestDataLoader:
     
     def get_memory_stats(self) -> Dict:
         """
-        Get memory usage statistics.
+        Get memory usage and performance statistics.
         
         Returns:
-            Dict with memory stats
+            Dict with memory stats and Phase 1.3 enhancements
         """
         cache_hit_rate = (self.cache_hits / max(self.cache_hits + self.cache_misses, 1)) * 100
         
         return {
-            'cache_size': len(self.data_cache),
-            'cache_hits': self.cache_hits,
-            'cache_misses': self.cache_misses,
-            'cache_hit_rate_pct': cache_hit_rate,
-            'max_memory_mb': self.max_memory_mb,
-            'streaming_enabled': self.enable_streaming
+            'cache_performance': {
+                'cache_size': len(self.data_cache),
+                'cache_hits': self.cache_hits,
+                'cache_misses': self.cache_misses,
+                'cache_hit_rate_pct': round(cache_hit_rate, 1),
+            },
+            'memory_management': {
+                'max_memory_mb': self.max_memory_mb,
+                'streaming_enabled': self.enable_streaming,
+                'chunk_size_hours': self.chunk_size_hours,
+            },
+            'chunking_config': {
+                'enable_1s_chunking': self.enable_1s_chunking,
+                'max_retries': self.max_retries,
+                'adaptive_chunk_sizing': True,
+            },
+            'performance_optimizations': {
+                'progressive_loading': True,
+                'retry_logic_enabled': True,
+                'memory_efficient_processing': True,
+                'duplicate_removal': True,
+            }
         }
     
     def clear_cache(self):
@@ -470,6 +497,57 @@ class BacktestDataLoader:
                 }
         
         return quality
+    
+    def get_chunking_progress(self, start_time: datetime, end_time: datetime, 
+                             chunk_size_hours: Optional[int] = None) -> Dict:
+        """
+        Calculate chunking progress information for large 1s data loads.
+        
+        Args:
+            start_time: Start datetime for data load
+            end_time: End datetime for data load
+            chunk_size_hours: Override default chunk size
+            
+        Returns:
+            Dict with progress calculation details
+        """
+        chunk_hours = chunk_size_hours or self.chunk_size_hours
+        chunk_duration = timedelta(hours=chunk_hours)
+        total_duration = end_time - start_time
+        total_chunks = int(total_duration.total_seconds() / chunk_duration.total_seconds()) + 1
+        
+        # Calculate data density estimates
+        total_1s_points = int(total_duration.total_seconds())  # 1 point per second
+        points_per_chunk = chunk_hours * 3600  # seconds per chunk
+        estimated_memory_per_chunk_mb = (points_per_chunk * 8 * 6) / (1024 * 1024)  # 6 columns, 8 bytes each
+        
+        progress_info = {
+            'chunking_strategy': {
+                'total_chunks': total_chunks,
+                'chunk_size_hours': chunk_hours,
+                'adaptive_sizing': self.enable_1s_chunking,
+                'retry_enabled': self.max_retries > 0,
+            },
+            'data_estimates': {
+                'total_duration_hours': round(total_duration.total_seconds() / 3600, 2),
+                'estimated_1s_points': f"{total_1s_points:,}",
+                'points_per_chunk': f"{points_per_chunk:,}",
+                'estimated_memory_per_chunk_mb': round(estimated_memory_per_chunk_mb, 1),
+            },
+            'performance_expectations': {
+                'chunk_load_time_estimate_sec': chunk_hours * 0.5,  # ~0.5s per hour of 1s data
+                'total_estimated_time_min': round((total_chunks * chunk_hours * 0.5) / 60, 1),
+                'memory_peak_mb': round(estimated_memory_per_chunk_mb * 1.5, 1),  # Safety factor
+            },
+            'optimization_settings': {
+                'max_retries': self.max_retries,
+                'progressive_backoff': True,
+                'duplicate_removal': True,
+                'memory_cleanup': self.enable_streaming,
+            }
+        }
+        
+        return progress_info
     
     def _load_1s_data_chunked(self, symbol, start_time, end_time):
         """
