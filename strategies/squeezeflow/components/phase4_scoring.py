@@ -171,21 +171,21 @@ class ScoringSystem:
         convergence = reset.get('convergence', {})
         convergence_strength = convergence.get('strength', 0)
         
-        # Score based on convergence strength (even without strict convergence detection)
-        if convergence_strength > 0.5:  # Strong convergence
-            score += max_score * 0.5
-        elif convergence_strength > 0.3:  # Moderate convergence
-            score += max_score * 0.3
-        elif convergence_strength > 0.1:  # Any convergence signal
-            score += max_score * 0.2
+        # Score based on convergence strength (tightened for 1s data)
+        if convergence_strength > 0.6:  # Strong convergence (was 0.5)
+            score += max_score * 0.4  # Reduced multiplier
+        elif convergence_strength > 0.4:  # Moderate convergence (was 0.3)
+            score += max_score * 0.25  # Reduced multiplier
+        elif convergence_strength > 0.25:  # Weak convergence (was 0.1)
+            score += max_score * 0.15  # Reduced multiplier
         elif len(spot_cvd) >= 10:
             # Even without convergence, look for CVD relationship patterns
             spot_recent_change = abs(spot_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             futures_recent_change = abs(futures_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             
-            # If both CVDs are showing similar patterns, award some points
-            if abs(spot_recent_change - futures_recent_change) < max(spot_recent_change, futures_recent_change) * 0.5:
-                score += max_score * 0.1  # Small reward for CVD alignment
+            # If both CVDs are showing similar patterns, award some points (stricter for 1s)
+            if abs(spot_recent_change - futures_recent_change) < max(spot_recent_change, futures_recent_change) * 0.3:
+                score += max_score * 0.05  # Smaller reward for CVD alignment
             
         # Check for deceleration pattern
         if len(spot_cvd) >= 20:
@@ -193,12 +193,12 @@ class ScoringSystem:
             recent_movement = abs(spot_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             earlier_movement = abs(spot_cvd.iloc[-20:-10].pct_change(fill_method=None).mean())
             
-            if earlier_movement > 0 and recent_movement < earlier_movement * 0.5:
+            if earlier_movement > 0.001 and recent_movement < earlier_movement * 0.4:  # Stricter thresholds
                 # Strong deceleration detected
-                score += max_score * 0.3
-            elif earlier_movement > 0 and recent_movement < earlier_movement * 0.7:
+                score += max_score * 0.25  # Reduced multiplier
+            elif earlier_movement > 0.0005 and recent_movement < earlier_movement * 0.6:  # Stricter
                 # Moderate deceleration
-                score += max_score * 0.2
+                score += max_score * 0.15  # Reduced multiplier
                 
         # Check momentum exhaustion from reset
         if reset.get('momentum_exhaustion', {}).get('exhausted', False):
@@ -242,10 +242,10 @@ class ScoringSystem:
         for idx in range(len(recent_candles)):
             candle = recent_candles.iloc[idx]
             
-            # Check for buyers stepping in (close > open)
-            if candle[close_col] > candle[open_col]:
+            # Check for buyers stepping in (require meaningful move for 1s data)
+            if candle[close_col] > candle[open_col] * 1.0002:  # 0.02% minimum move
                 absorption_count += 1
-                score += max_score * 0.15
+                score += max_score * 0.1  # Reduced multiplier
                 
             # Check for wick rejection (wick below but close above)
             wick_size = (candle[close_col] - candle[low_col]) / (candle[high_col] - candle[low_col] + 0.0001)
@@ -355,12 +355,12 @@ class ScoringSystem:
         if pd.isna(futures_recent):
             futures_recent = 0
             
-        # Check if both CVDs moving in same direction
+        # Check if both CVDs moving in same direction (much stricter for 1s data)
         cvd_aligned = np.sign(spot_recent) == np.sign(futures_recent)
-        if cvd_aligned and abs(spot_recent) > 0.0001:  # Lower threshold for movement detection
-            score += max_score * 0.5
-        elif abs(spot_recent) > 0.0001:  # Award partial points for any CVD movement
-            score += max_score * 0.3
+        if cvd_aligned and abs(spot_recent) > 0.002:  # 20x stricter threshold
+            score += max_score * 0.4  # Reduced multiplier
+        elif abs(spot_recent) > 0.001:  # 10x stricter threshold
+            score += max_score * 0.2  # Reduced multiplier
             
         # Check if price follows CVD
         price_recent = ohlcv[close_col].iloc[-5:].pct_change(fill_method=None).mean()
@@ -369,10 +369,10 @@ class ScoringSystem:
             
         price_follows_cvd = np.sign(price_recent) == np.sign(spot_recent) if spot_recent != 0 else False
         
-        if price_follows_cvd and abs(price_recent) > 0.0001:
-            score += max_score * 0.3
-        elif abs(price_recent) > 0.0001:  # Award some points for any price movement
-            score += max_score * 0.1
+        if price_follows_cvd and abs(price_recent) > 0.001:  # 10x stricter
+            score += max_score * 0.25  # Reduced multiplier
+        elif abs(price_recent) > 0.0005:  # 5x stricter
+            score += max_score * 0.05  # Much smaller reward
             
         # Consider market context (always award some points for context alignment)
         market_bias = context.get('market_bias', 'NEUTRAL')
