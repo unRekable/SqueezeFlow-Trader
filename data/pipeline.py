@@ -141,8 +141,10 @@ class DataPipeline:
         # Check if we need to split the query based on date range
         date_diff = (end_time - start_time).days
         
-        # Split queries for date ranges > 3 days to avoid timeouts
-        if date_diff > 3:
+        # Use different chunk strategies based on timeframe
+        if timeframe == '1s' and date_diff > 0.1:  # 2.4 hours for 1s data
+            return self._load_ohlcv_data_chunked(all_markets, start_time, end_time, timeframe, chunk_hours=2)
+        elif date_diff > 3:  # 3 days for regular timeframes
             return self._load_ohlcv_data_chunked(all_markets, start_time, end_time, timeframe)
         
         # Load data from InfluxDB for smaller ranges
@@ -417,7 +419,7 @@ class DataPipeline:
         return validations
     
     def _load_ohlcv_data_chunked(self, markets: List[str], start_time: datetime, 
-                                end_time: datetime, timeframe: str) -> pd.DataFrame:
+                                end_time: datetime, timeframe: str, chunk_hours: int = 72) -> pd.DataFrame:
         """
         Load OHLCV data in chunks for large date ranges to avoid timeouts
         

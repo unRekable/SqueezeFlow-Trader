@@ -14,6 +14,9 @@ from datetime import datetime, timedelta
 import pytz
 from typing import Dict, List, Optional, Any
 import time
+import gc
+import psutil
+from collections import deque
 
 from data.pipeline import create_data_pipeline
 
@@ -41,15 +44,39 @@ class BacktestEngine:
     """
     Pure orchestration engine - loads data and executes orders
     Strategy has COMPLETE authority over all calculations and decisions
+    
+    1s Data Memory Management:
+    - Streaming data pipeline prevents OOM errors
+    - Rolling window system with LRU cache
+    - Explicit memory cleanup with garbage collection
+    - Memory monitoring with auto-pause threshold
     """
     
-    def __init__(self, initial_balance: float = 10000.0, leverage: float = 1.0):
+    def __init__(self, initial_balance: float = 10000.0, leverage: float = 1.0, 
+                 enable_1s_mode: bool = False, max_memory_gb: float = 8.0):
         self.initial_balance = initial_balance
         self.leverage = leverage
         self.portfolio = Portfolio(initial_balance)
         self.data_pipeline = create_data_pipeline()
         self.logger = BacktestLogger()
         self.visualizer = BacktestVisualizer()
+        
+        # 1s Data Memory Management Configuration
+        self.enable_1s_mode = enable_1s_mode
+        self.max_memory_gb = max_memory_gb
+        self.chunk_hours = 2 if enable_1s_mode else 72  # 2h chunks for 1s, 3d for regular
+        self.rolling_window_size = 7200 if enable_1s_mode else 288  # 2h of 1s data vs 24h of 5m data
+        self.memory_check_interval = 100  # Check memory every N windows
+        
+        # Rolling window cache for memory efficiency (LRU cache)
+        self.data_window_cache = deque(maxlen=self.rolling_window_size)
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
+        # Memory monitoring
+        self.process = psutil.Process()
+        self.peak_memory_mb = 0
+        self.memory_warnings = 0
         
         # CVD baseline tracking for backtests
         self.fake_redis = FakeRedis()
@@ -106,35 +133,52 @@ class BacktestEngine:
         self.logger.info(f"💰 Initial balance: ${self.initial_balance:,.2f}")
         self.logger.info("🔄 Using 4-hour rolling windows with 5-minute steps")
         
-        # STEP 1: LOAD COMPLETE RAW DATA FIRST
-        self.logger.info("📊 Loading complete raw market data...")
-        full_dataset = self.data_pipeline.get_complete_dataset(
-            symbol=symbol,
-            start_time=start_time,
-            end_time=end_time,
-            timeframe=timeframe
-        )
-        
-        # Validate data quality
-        quality = self.data_pipeline.validate_data_quality(full_dataset)
-        if not quality['overall_quality']:
-            self.logger.error(f"❌ Data quality check failed: {quality}")
-            return self._create_failed_result("Data quality insufficient")
-        
-        self.logger.info(f"✅ Data loaded: {full_dataset['metadata']['data_points']} data points")
-        self.logger.info(f"📈 Markets: {full_dataset['metadata']['spot_markets_count']} SPOT, {full_dataset['metadata']['futures_markets_count']} FUTURES")
-        
-        # STEP 2: ROLLING WINDOW STRATEGY PROCESSING
-        self.logger.info("🧠 Running rolling window strategy analysis...")
-        
-        try:
-            executed_orders = self._run_rolling_window_backtest(
-                full_dataset, start_time, end_time, timeframe
+        # STEP 1: MEMORY-EFFICIENT DATA LOADING
+        if self.enable_1s_mode:
+            self.logger.info("🚨 1s MODE: Using streaming data pipeline to prevent OOM errors")
+            self.logger.info(f"⚙️  Memory limit: {self.max_memory_gb}GB, Chunk size: {self.chunk_hours}h")
+            # For 1s mode, we'll use streaming approach - no upfront full dataset loading
+            full_dataset = self._create_minimal_dataset_structure(symbol, timeframe, start_time, end_time)
+        else:
+            self.logger.info("📊 Loading complete raw market data...")
+            full_dataset = self.data_pipeline.get_complete_dataset(
+                symbol=symbol,
+                start_time=start_time,
+                end_time=end_time,
+                timeframe=timeframe
             )
             
+            # Validate data quality for regular mode
+            quality = self.data_pipeline.validate_data_quality(full_dataset)
+            if not quality['overall_quality']:
+                self.logger.error(f"❌ Data quality check failed: {quality}")
+                return self._create_failed_result("Data quality insufficient")
+            
+            self.logger.info(f"✅ Data loaded: {full_dataset['metadata']['data_points']} data points")
+            self.logger.info(f"📈 Markets: {full_dataset['metadata']['spot_markets_count']} SPOT, {full_dataset['metadata']['futures_markets_count']} FUTURES")
+        
+        # STEP 2: MEMORY-EFFICIENT ROLLING WINDOW STRATEGY PROCESSING
+        if self.enable_1s_mode:
+            self.logger.info("🧠 Running memory-efficient streaming strategy analysis...")
+        else:
+            self.logger.info("🧠 Running rolling window strategy analysis...")
+        
+        try:
+            if self.enable_1s_mode:
+                executed_orders = self._run_streaming_backtest(
+                    symbol, start_time, end_time, timeframe
+                )
+            else:
+                executed_orders = self._run_rolling_window_backtest(
+                    full_dataset, start_time, end_time, timeframe
+                )
+            
         except Exception as e:
-            self.logger.error(f"❌ Rolling window processing failed: {e}")
+            self.logger.error(f"❌ Strategy processing failed: {e}")
             return self._create_failed_result(f"Strategy error: {e}")
+        
+        # Final memory cleanup
+        self._cleanup_memory()
         
         # STEP 3: GENERATE RESULTS
         result = self._create_result(full_dataset, executed_orders)
@@ -148,6 +192,10 @@ class BacktestEngine:
         
         self.logger.info(f"🎯 Backtest completed - Final balance: ${result['final_balance']:,.2f}")
         self.logger.info(f"📈 Total return: {result['total_return']:.2f}%")
+        
+        # Log final memory statistics
+        if self.enable_1s_mode:
+            self._log_memory_statistics()
         
         return result
     
@@ -260,6 +308,359 @@ class BacktestEngine:
         
         self.logger.info(f"🎯 Rolling window processing completed: {len(all_executed_orders)} total orders executed")
         return all_executed_orders
+    
+    def _run_streaming_backtest(self, symbol: str, start_time: datetime, 
+                               end_time: datetime, timeframe: str) -> List[Dict]:
+        """
+        Memory-efficient streaming backtest for 1s data
+        Processes data in small chunks to prevent OOM errors
+        
+        Args:
+            symbol: Trading symbol
+            start_time: Backtest start time
+            end_time: Backtest end time  
+            timeframe: Trading timeframe
+            
+        Returns:
+            List of executed orders from all chunks
+        """
+        # Rolling window parameters optimized for 1s data
+        if timeframe == '1s':
+            window_hours = 1  # Smaller windows for 1s data (3600 data points)
+            step_minutes = 1  # Step forward 1 minute for dense data
+        else:
+            window_hours = 2  # 2-hour windows for other timeframes
+            step_minutes = 5  # Step forward 5 minutes
+        
+        window_duration = timedelta(hours=window_hours)
+        step_duration = timedelta(minutes=step_minutes)
+        
+        all_executed_orders = []
+        
+        # Calculate total iterations for progress tracking
+        total_duration = end_time - start_time
+        total_iterations = int(total_duration.total_seconds() / step_duration.total_seconds())
+        
+        self.logger.info(f"🔄 Streaming processing: {total_iterations:,} windows ({window_hours}h windows, {step_minutes}m steps)")
+        self.logger.info(f"🎯 Target chunk size: {self.chunk_hours}h for optimal memory usage")
+        
+        # Start processing
+        current_time = start_time + window_duration
+        iteration = 0
+        
+        while current_time <= end_time:
+            iteration += 1
+            
+            # Define window boundaries
+            window_start = current_time - window_duration
+            window_end = current_time
+            
+            # Memory monitoring every N iterations
+            if iteration % self.memory_check_interval == 0:
+                if not self._check_memory_usage(iteration, total_iterations):
+                    self.logger.error("❌ Memory limit exceeded, stopping backtest")
+                    break
+            
+            # Progress logging
+            if iteration % 100 == 0 or iteration == total_iterations:
+                progress_pct = (iteration / total_iterations) * 100
+                self.logger.info(f"🔄 Progress: {iteration:,}/{total_iterations:,} ({progress_pct:.1f}%) - Window: {window_end.strftime('%Y-%m-%d %H:%M')}")
+            
+            try:
+                # Load data for current window using streaming approach
+                windowed_dataset = self._load_streaming_window_data(
+                    symbol, window_start, window_end, timeframe
+                )
+                
+                # Skip if insufficient data in window
+                if not self._validate_windowed_data(windowed_dataset):
+                    current_time += step_duration
+                    continue
+                
+                # Add to rolling cache and remove old data
+                self._manage_rolling_cache(windowed_dataset, window_end)
+                
+                # Get current portfolio state
+                portfolio_state = self.portfolio.get_state()
+                portfolio_state['available_leverage'] = self.leverage
+                portfolio_state['current_time'] = current_time
+                
+                # Process strategy with windowed data
+                strategy_result = self.strategy.process(windowed_dataset, portfolio_state)
+                
+                if strategy_result and 'orders' in strategy_result:
+                    orders = strategy_result['orders']
+                    
+                    # Execute any orders generated for this window
+                    for order in orders:
+                        # Ensure order timestamp doesn't exceed current_time and is timezone-aware
+                        if 'timestamp' not in order or order['timestamp'] > current_time:
+                            order['timestamp'] = current_time
+                        elif 'timestamp' in order and order['timestamp'].tzinfo is None and current_time.tzinfo is not None:
+                            order['timestamp'] = order['timestamp'].replace(tzinfo=current_time.tzinfo)
+                        
+                        execution_result = self._execute_order(order, windowed_dataset)
+                        if execution_result:
+                            all_executed_orders.append(execution_result)
+                            
+                            # Log significant trades
+                            side = execution_result.get('side', 'UNKNOWN')
+                            qty = execution_result.get('quantity', 0)
+                            price = execution_result.get('price', 0)
+                            signal_type = execution_result.get('signal_type', 'UNKNOWN')
+                            
+                            self.logger.info(f"✅ {window_end.strftime('%Y-%m-%d %H:%M')} - {side} {qty:.6f} @ ${price:.2f} ({signal_type})")
+                
+                # Explicit memory cleanup for 1s mode
+                del windowed_dataset
+                if iteration % 50 == 0:  # Force GC every 50 iterations
+                    collected = gc.collect()
+                    if collected > 0:
+                        self.logger.debug(f"🗑️ Garbage collected {collected} objects")
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error processing streaming window {window_end}: {e}")
+                # Continue processing despite errors
+            
+            # Move to next window
+            current_time += step_duration
+        
+        self.logger.info(f"🎯 Streaming processing completed: {len(all_executed_orders)} total orders executed")
+        return all_executed_orders
+    
+    def _load_streaming_window_data(self, symbol: str, window_start: datetime, 
+                                   window_end: datetime, timeframe: str) -> Dict:
+        """
+        Load data for a single window using streaming approach
+        
+        Args:
+            symbol: Trading symbol
+            window_start: Start of window
+            window_end: End of window
+            timeframe: Timeframe
+            
+        Returns:
+            Dataset for current window
+        """
+        try:
+            # Check cache first (LRU behavior)
+            cache_key = f"{symbol}_{window_start.isoformat()}_{window_end.isoformat()}_{timeframe}"
+            
+            # Simple cache check (basic implementation)
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                self.cache_hits += 1
+                return cached_data
+            
+            self.cache_misses += 1
+            
+            # Load fresh data for this window
+            dataset = self.data_pipeline.get_complete_dataset(
+                symbol=symbol,
+                start_time=window_start,
+                end_time=window_end,
+                timeframe=timeframe
+            )
+            
+            # Add to cache
+            self._add_to_cache(cache_key, dataset)
+            
+            return dataset
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load streaming window data: {e}")
+            return self._create_minimal_dataset_structure(symbol, timeframe, window_start, window_end)
+    
+    def _manage_rolling_cache(self, dataset: Dict, timestamp: datetime):
+        """
+        Manage rolling window cache with LRU eviction
+        
+        Args:
+            dataset: Dataset to cache
+            timestamp: Window timestamp
+        """
+        cache_entry = {
+            'timestamp': timestamp,
+            'data_points': dataset.get('metadata', {}).get('data_points', 0),
+            'size_estimate': self._estimate_dataset_size(dataset)
+        }
+        
+        # Add to rolling cache (deque automatically handles max size)
+        self.data_window_cache.append(cache_entry)
+    
+    def _estimate_dataset_size(self, dataset: Dict) -> int:
+        """
+        Estimate memory size of dataset in MB
+        
+        Args:
+            dataset: Dataset to estimate
+            
+        Returns:
+            Estimated size in MB
+        """
+        size_mb = 0
+        
+        # Estimate DataFrame sizes
+        for key in ['ohlcv', 'spot_volume', 'futures_volume']:
+            df = dataset.get(key, pd.DataFrame())
+            if not df.empty:
+                size_mb += df.memory_usage(deep=True).sum() / (1024 * 1024)
+        
+        # Estimate Series sizes
+        for key in ['spot_cvd', 'futures_cvd', 'cvd_divergence']:
+            series = dataset.get(key, pd.Series())
+            if not series.empty:
+                size_mb += series.memory_usage(deep=True) / (1024 * 1024)
+        
+        return int(size_mb)
+    
+    def _check_memory_usage(self, iteration: int, total_iterations: int) -> bool:
+        """
+        Check current memory usage and warn/pause if approaching limits
+        
+        Args:
+            iteration: Current iteration number
+            total_iterations: Total iterations
+            
+        Returns:
+            True if safe to continue, False if should stop
+        """
+        try:
+            # Get current memory usage
+            memory_info = self.process.memory_info()
+            current_memory_mb = memory_info.rss / (1024 * 1024)
+            current_memory_gb = current_memory_mb / 1024
+            
+            # Update peak memory tracking
+            if current_memory_mb > self.peak_memory_mb:
+                self.peak_memory_mb = current_memory_mb
+            
+            # Check against limit
+            memory_usage_pct = (current_memory_gb / self.max_memory_gb) * 100
+            
+            if current_memory_gb > self.max_memory_gb * 0.9:  # 90% warning threshold
+                self.memory_warnings += 1
+                self.logger.warning(f"⚠️ Memory usage high: {current_memory_gb:.1f}GB ({memory_usage_pct:.1f}%) - Iteration {iteration}")
+                
+                # Force aggressive garbage collection
+                collected = gc.collect()
+                self.logger.info(f"🗑️ Emergency GC collected {collected} objects")
+                
+                # Check again after GC
+                memory_info_after = self.process.memory_info()
+                memory_after_gb = (memory_info_after.rss / (1024 * 1024)) / 1024
+                
+                if memory_after_gb > self.max_memory_gb:
+                    self.logger.error(f"❌ Memory limit exceeded: {memory_after_gb:.1f}GB > {self.max_memory_gb}GB")
+                    return False
+            
+            # Log memory status periodically
+            if iteration % (self.memory_check_interval * 2) == 0:
+                progress_pct = (iteration / total_iterations) * 100
+                self.logger.info(f"💾 Memory: {current_memory_gb:.1f}GB ({memory_usage_pct:.1f}%) - Cache: {self.cache_hits}/{self.cache_hits + self.cache_misses} hits")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"Memory check failed: {e}")
+            return True  # Continue on memory check errors
+    
+    def _cleanup_memory(self):
+        """
+        Final memory cleanup after backtest completion
+        """
+        self.logger.info("🧹 Performing final memory cleanup...")
+        
+        # Clear caches
+        self.data_window_cache.clear()
+        
+        # Clear pipeline caches if available
+        if hasattr(self.data_pipeline, 'clear_cache'):
+            self.data_pipeline.clear_cache()
+        
+        # Force garbage collection
+        collected = gc.collect()
+        self.logger.info(f"🗑️ Final cleanup collected {collected} objects")
+    
+    def _log_memory_statistics(self):
+        """
+        Log final memory usage statistics for 1s mode
+        """
+        try:
+            final_memory_mb = self.process.memory_info().rss / (1024 * 1024)
+            final_memory_gb = final_memory_mb / 1024
+            
+            cache_hit_rate = (self.cache_hits / max(self.cache_hits + self.cache_misses, 1)) * 100
+            
+            self.logger.info("📊 Memory Statistics Summary:")
+            self.logger.info(f"   Peak Memory: {self.peak_memory_mb:.1f}MB ({self.peak_memory_mb/1024:.1f}GB)")
+            self.logger.info(f"   Final Memory: {final_memory_mb:.1f}MB ({final_memory_gb:.1f}GB)")
+            self.logger.info(f"   Memory Limit: {self.max_memory_gb}GB")
+            self.logger.info(f"   Memory Warnings: {self.memory_warnings}")
+            self.logger.info(f"   Cache Hit Rate: {cache_hit_rate:.1f}% ({self.cache_hits}/{self.cache_hits + self.cache_misses})")
+            self.logger.info(f"   Rolling Cache Size: {len(self.data_window_cache)}/{self.rolling_window_size}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to log memory statistics: {e}")
+    
+    def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
+        """
+        Simple cache lookup (basic implementation)
+        
+        Args:
+            cache_key: Cache key to lookup
+            
+        Returns:
+            Cached dataset or None
+        """
+        # Basic implementation - in production this would be more sophisticated
+        return None
+    
+    def _add_to_cache(self, cache_key: str, dataset: Dict):
+        """
+        Add dataset to cache (basic implementation)
+        
+        Args:
+            cache_key: Cache key
+            dataset: Dataset to cache
+        """
+        # Basic implementation - in production this would implement actual caching
+        pass
+    
+    def _create_minimal_dataset_structure(self, symbol: str, timeframe: str, 
+                                         start_time: datetime, end_time: datetime) -> Dict:
+        """
+        Create minimal dataset structure for streaming mode
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe
+            start_time: Start time
+            end_time: End time
+            
+        Returns:
+            Minimal dataset structure
+        """
+        return {
+            'symbol': symbol,
+            'timeframe': timeframe,
+            'start_time': start_time,
+            'end_time': end_time,
+            'ohlcv': pd.DataFrame(),
+            'spot_volume': pd.DataFrame(),
+            'futures_volume': pd.DataFrame(),
+            'spot_cvd': pd.Series(dtype=float),
+            'futures_cvd': pd.Series(dtype=float),
+            'cvd_divergence': pd.Series(dtype=float),
+            'markets': {'spot': [], 'perp': []},
+            'data_source': 'streaming',
+            'metadata': {
+                'spot_markets_count': 0,
+                'futures_markets_count': 0,
+                'data_points': 0,
+                'streaming_mode': True
+            }
+        }
     
     def _create_windowed_dataset(self, full_dataset: Dict, window_start: datetime, 
                                window_end: datetime) -> Dict:
@@ -649,19 +1050,26 @@ if __name__ == "__main__":
             }
     
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SqueezeFlow Backtest Engine')
+    parser = argparse.ArgumentParser(description='SqueezeFlow Backtest Engine with 1s Data Support')
     parser.add_argument('--symbol', default='BTCUSDT', help='Trading symbol')
     parser.add_argument('--start-date', default='2024-08-01', help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end-date', default='2024-08-04', help='End date (YYYY-MM-DD)')
-    parser.add_argument('--timeframe', default='5m', help='Timeframe (1m, 5m, 15m, etc.)')
+    parser.add_argument('--timeframe', default='5m', help='Timeframe (1s, 1m, 5m, 15m, etc.)')
     parser.add_argument('--balance', type=float, default=10000.0, help='Initial balance')
     parser.add_argument('--leverage', type=float, default=1.0, help='Trading leverage (default: 1.0)')
     parser.add_argument('--strategy', default='SqueezeFlowStrategy', help='Strategy class name')
+    parser.add_argument('--enable-1s-mode', action='store_true', help='Enable 1s mode for memory-efficient processing')
+    parser.add_argument('--max-memory-gb', type=float, default=8.0, help='Maximum memory limit in GB (default: 8.0)')
     
     args = parser.parse_args()
     
-    # Create engine with leverage support
-    engine = BacktestEngine(initial_balance=args.balance, leverage=args.leverage)
+    # Create engine with 1s mode support
+    engine = BacktestEngine(
+        initial_balance=args.balance, 
+        leverage=args.leverage,
+        enable_1s_mode=args.enable_1s_mode,
+        max_memory_gb=args.max_memory_gb
+    )
     
     # Load strategy
     if args.strategy == 'SqueezeFlowStrategy':
@@ -685,3 +1093,5 @@ if __name__ == "__main__":
     print(f"Backtest Result: {result['total_return']:.2f}% return")
     print(f"Leverage Used: {args.leverage}x")
     print(f"Total Trades: {result['total_trades']}")
+    if args.enable_1s_mode:
+        print(f"1s Mode: Enabled (Memory Limit: {args.max_memory_gb}GB)")

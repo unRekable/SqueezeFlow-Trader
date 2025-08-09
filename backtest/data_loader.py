@@ -10,33 +10,59 @@ import numpy as np
 from influxdb import InfluxDBClient
 from datetime import datetime, timedelta
 import logging
+import gc
+from typing import Iterator, Dict, Optional
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
 
 class BacktestDataLoader:
     """
-    Data loader for backtesting with 1-second data aggregation support.
+    Memory-efficient data loader for backtesting with 1-second data support.
+    
+    Features:
+    - Streaming data loading to prevent OOM errors
+    - Memory-efficient rolling windows with LRU cache
+    - Explicit memory cleanup and garbage collection
+    - Configurable chunk sizes for different timeframes
     
     This class loads raw 1-second data from InfluxDB and dynamically
     aggregates it to any required timeframe for backtesting.
     """
     
-    def __init__(self, host='localhost', port=8086, database='significant_trades'):
+    def __init__(self, host='localhost', port=8086, database='significant_trades',
+                 enable_streaming=False, max_memory_mb=4096, chunk_size_hours=2):
         """
-        Initialize the backtest data loader.
+        Initialize the memory-efficient backtest data loader.
         
         Args:
             host: InfluxDB host
             port: InfluxDB port
             database: InfluxDB database name
+            enable_streaming: Enable streaming mode for memory efficiency
+            max_memory_mb: Maximum memory usage in MB
+            chunk_size_hours: Chunk size in hours for streaming
         """
         self.influx = InfluxDBClient(
             host=host,
             port=port,
             database=database
         )
-        logger.info(f"BacktestDataLoader initialized with {host}:{port}/{database}")
+        
+        # Memory management configuration
+        self.enable_streaming = enable_streaming
+        self.max_memory_mb = max_memory_mb
+        self.chunk_size_hours = chunk_size_hours
+        
+        # Streaming cache for memory efficiency
+        self.data_cache = deque(maxlen=100)  # LRU cache for recent chunks
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
+        logger.info(f"BacktestDataLoader initialized: {host}:{port}/{database}")
+        if enable_streaming:
+            logger.info(f"Streaming mode enabled: {max_memory_mb}MB limit, {chunk_size_hours}h chunks")
     
     def load_1s_data(self, symbol, start_time, end_time):
         """
@@ -211,6 +237,189 @@ class BacktestDataLoader:
         
         return result
     
+    def load_streaming_data(self, symbol: str, start_time: datetime, 
+                           end_time: datetime, timeframe: str = '1s') -> Iterator[Dict]:
+        """
+        Memory-efficient streaming data loader for 1s backtests.
+        
+        Yields data in chunks to prevent OOM errors with large datasets.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BINANCE:btcusdt')
+            start_time: Start time
+            end_time: End time 
+            timeframe: Target timeframe
+            
+        Yields:
+            Dict with chunk data for each time window
+        """
+        if not self.enable_streaming:
+            # Fallback to regular loading
+            data = self.get_multi_timeframe_data(symbol, start_time, end_time, cache_1s=True)
+            if data:
+                yield {'timeframe': timeframe, 'data': data, 'chunk_info': {'total': 1, 'current': 1}}
+            return
+        
+        # Calculate chunks for streaming
+        total_duration = end_time - start_time
+        chunk_duration = timedelta(hours=self.chunk_size_hours)
+        total_chunks = int(total_duration.total_seconds() / chunk_duration.total_seconds()) + 1
+        
+        logger.info(f"Streaming {symbol} data in {total_chunks} chunks of {self.chunk_size_hours}h each")
+        
+        current_start = start_time
+        chunk_num = 0
+        
+        while current_start < end_time:
+            chunk_num += 1
+            chunk_end = min(current_start + chunk_duration, end_time)
+            
+            try:
+                # Load chunk data
+                chunk_data = self._load_chunk_with_cache(symbol, current_start, chunk_end, timeframe)
+                
+                if chunk_data:
+                    yield {
+                        'timeframe': timeframe,
+                        'data': chunk_data, 
+                        'chunk_info': {
+                            'total': total_chunks,
+                            'current': chunk_num,
+                            'start_time': current_start,
+                            'end_time': chunk_end,
+                            'progress_pct': (chunk_num / total_chunks) * 100
+                        }
+                    }
+                
+                # Memory cleanup after each chunk
+                del chunk_data
+                if chunk_num % 5 == 0:  # Force GC every 5 chunks
+                    collected = gc.collect()
+                    logger.debug(f"GC collected {collected} objects after chunk {chunk_num}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to load chunk {chunk_num}: {e}")
+            
+            current_start = chunk_end
+        
+        logger.info(f"Streaming completed: {chunk_num} chunks processed")
+    
+    def _load_chunk_with_cache(self, symbol: str, start_time: datetime, 
+                              end_time: datetime, timeframe: str) -> Optional[Dict]:
+        """
+        Load data chunk with caching support.
+        
+        Args:
+            symbol: Trading symbol
+            start_time: Chunk start time
+            end_time: Chunk end time
+            timeframe: Timeframe
+            
+        Returns:
+            Chunk data dictionary or None
+        """
+        cache_key = f"{symbol}_{start_time.isoformat()}_{end_time.isoformat()}_{timeframe}"
+        
+        # Check cache first
+        cached_data = self._get_from_cache(cache_key)
+        if cached_data is not None:
+            self.cache_hits += 1
+            return cached_data
+        
+        self.cache_misses += 1
+        
+        # Load fresh data
+        try:
+            if timeframe == '1s':
+                # Load 1s data and aggregate to required timeframe
+                df_1s = self.load_1s_data(symbol, start_time, end_time)
+                if df_1s.empty:
+                    return None
+                
+                chunk_data = {
+                    '1s': df_1s,
+                    '1m': self.aggregate_to_timeframe(df_1s, '1T'),
+                    '5m': self.aggregate_to_timeframe(df_1s, '5T'),
+                    '15m': self.aggregate_to_timeframe(df_1s, '15T'),
+                    '30m': self.aggregate_to_timeframe(df_1s, '30T'),
+                    '1h': self.aggregate_to_timeframe(df_1s, '1H'),
+                    '4h': self.aggregate_to_timeframe(df_1s, '4H')
+                }
+            else:
+                # Regular timeframe loading
+                chunk_data = self.get_multi_timeframe_data(
+                    symbol, start_time, end_time, cache_1s=False
+                )
+            
+            # Add to cache
+            self._add_to_cache(cache_key, chunk_data)
+            
+            return chunk_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load chunk data: {e}")
+            return None
+    
+    def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
+        """
+        Get data from cache.
+        
+        Args:
+            cache_key: Cache key
+            
+        Returns:
+            Cached data or None
+        """
+        # Simple cache lookup (basic implementation)
+        for item in self.data_cache:
+            if item.get('key') == cache_key:
+                return item.get('data')
+        return None
+    
+    def _add_to_cache(self, cache_key: str, data: Dict):
+        """
+        Add data to cache.
+        
+        Args:
+            cache_key: Cache key
+            data: Data to cache
+        """
+        # Add to deque cache (LRU behavior with maxlen)
+        cache_item = {
+            'key': cache_key,
+            'data': data.copy() if data else None,
+            'timestamp': datetime.now()
+        }
+        self.data_cache.append(cache_item)
+    
+    def get_memory_stats(self) -> Dict:
+        """
+        Get memory usage statistics.
+        
+        Returns:
+            Dict with memory stats
+        """
+        cache_hit_rate = (self.cache_hits / max(self.cache_hits + self.cache_misses, 1)) * 100
+        
+        return {
+            'cache_size': len(self.data_cache),
+            'cache_hits': self.cache_hits,
+            'cache_misses': self.cache_misses,
+            'cache_hit_rate_pct': cache_hit_rate,
+            'max_memory_mb': self.max_memory_mb,
+            'streaming_enabled': self.enable_streaming
+        }
+    
+    def clear_cache(self):
+        """
+        Clear data cache and force garbage collection.
+        """
+        self.data_cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+        collected = gc.collect()
+        logger.info(f"Cache cleared, GC collected {collected} objects")
+    
     def check_data_quality(self, data_dict):
         """
         Check data quality and coverage for backtesting.
@@ -276,7 +485,7 @@ class BacktestDataLoader:
         return pd.DataFrame()
 
 
-# Example usage function
+# Regular example usage function
 def example_backtest_with_1s_data():
     """
     Example of how to use the BacktestDataLoader with 1-second data.
@@ -316,7 +525,67 @@ def example_backtest_with_1s_data():
     return all_timeframes
 
 
+def example_streaming_backtest():
+    """
+    Example of streaming backtest with memory management.
+    """
+    from datetime import datetime, timedelta
+    
+    # Initialize streaming loader
+    loader = BacktestDataLoader(
+        enable_streaming=True,
+        max_memory_mb=2048,  # 2GB limit
+        chunk_size_hours=2   # 2-hour chunks
+    )
+    
+    # Define backtest period (smaller for example)
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=12)  # 12 hours of data
+    
+    print("Streaming 1s data processing example...")
+    
+    total_chunks = 0
+    total_1s_bars = 0
+    
+    # Process data in streaming chunks
+    for chunk in loader.load_streaming_data(
+        'BINANCE:btcusdt',
+        start_time,
+        end_time,
+        timeframe='1s'
+    ):
+        total_chunks += 1
+        chunk_info = chunk['chunk_info']
+        data = chunk['data']
+        
+        if data and '1s' in data:
+            chunk_1s_bars = len(data['1s'])
+            total_1s_bars += chunk_1s_bars
+            
+            print(f"Chunk {chunk_info['current']}/{chunk_info['total']} "
+                  f"({chunk_info['progress_pct']:.1f}%): {chunk_1s_bars} bars")
+        
+        # Simulate processing delay
+        import time
+        time.sleep(0.1)
+    
+    # Memory statistics
+    stats = loader.get_memory_stats()
+    print(f"\nProcessing completed:")
+    print(f"  Total chunks: {total_chunks}")
+    print(f"  Total 1s bars: {total_1s_bars:,}")
+    print(f"  Cache hit rate: {stats['cache_hit_rate_pct']:.1f}%")
+    
+    return total_1s_bars
+
+
 if __name__ == "__main__":
     # Run example if executed directly
     logging.basicConfig(level=logging.INFO)
+    
+    # Test both regular and streaming examples
+    print("=== Regular Example ===")
     example_backtest_with_1s_data()
+    
+    print("\n=== Streaming Example ===")
+    example_streaming_backtest()
