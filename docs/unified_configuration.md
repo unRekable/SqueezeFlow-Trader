@@ -31,6 +31,8 @@ The SqueezeFlow Trader system is configured through environment variables define
 | `INFLUX_RETENTION_1S` | string | **24h** | - | 1-second data retention policy (24h rolling window) |
 | `SQUEEZEFLOW_1S_BUFFER_SIZE` | integer | **3600** | - | 1-second data buffer size (3600 = 1 hour buffer) |
 | `SQUEEZEFLOW_1S_BATCH_SIZE` | integer | **100** | - | Batch size for 1s data processing optimization |
+| `SQUEEZEFLOW_BACKTEST_STEP_SECONDS` | integer | **1** | - | Backtest step size for 1s mode (evaluates every second) |
+| `SQUEEZEFLOW_BACKTEST_WINDOW_HOURS` | integer | **1** | 4 | Backtest window size (1h for 1s mode, 4h for regular) |
 
 #### 📊 1-Second Performance Configuration
 

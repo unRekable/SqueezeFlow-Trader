@@ -738,6 +738,25 @@ flowchart TD
 
 ---
 
+## 🎯 Backtest Execution Intervals
+
+### Adaptive Strategy Evaluation
+The system uses adaptive execution intervals to match data granularity:
+
+**1-Second Mode (1s data)**:
+- **Window Size**: 1 hour of historical data
+- **Step Size**: 1 second (evaluates strategy every second)
+- **Evaluations**: 3,600 per hour, 86,400 per day
+- **Purpose**: Full granularity testing matching real-time execution
+
+**Regular Mode (5m+ data)**:
+- **Window Size**: 4 hours of historical data  
+- **Step Size**: 5 minutes (evaluates strategy every 5 minutes)
+- **Evaluations**: 12 per hour, 288 per day
+- **Purpose**: Efficient processing for higher timeframes
+
+This ensures backtests accurately reflect live trading behavior at each timeframe.
+
 ## 🆕 Real-Time Configuration Examples
 
 ### 1-Second Strategy Runner Environment (Recommended)

@@ -162,7 +162,10 @@ Advanced rolling window backtesting system for realistic strategy validation:
 - `reporting/` - HTML reports, charts, and performance metrics
 - `results/` - Backtest outputs and historical runs
 
-**Rolling Window Processing**: The backtest engine processes data in 4-hour rolling windows, stepping forward 5 minutes at a time to match live trading behavior and eliminate lookahead bias. This ensures reset detection and all strategy phases work correctly with realistic data flow.
+**Rolling Window Processing**: The backtest engine uses adaptive processing based on data granularity:
+- **1s Mode**: 1-hour rolling windows stepping forward 1 second at a time (full granularity)
+- **Regular Mode**: 4-hour rolling windows stepping forward 5 minutes at a time
+This matches live trading behavior and eliminates lookahead bias, ensuring all strategy phases work correctly with realistic data flow.
 
 #### 📊 **Trading Strategy** (`/strategies/squeezeflow/`)
 5-phase trading methodology implementation:
@@ -267,8 +270,9 @@ python run_backtest.py last_month
 python backtest/engine.py --symbol BTCUSDT --start-date 2024-08-01 --end-date 2024-08-04
 ```
 
-**Rolling Window Backtests**: All backtests now use rolling window processing by default, which:
-- Processes data in 4-hour windows moving forward 5 minutes at a time
+**Rolling Window Backtests**: All backtests use adaptive rolling window processing:
+- **1s Mode**: 1-hour windows moving forward 1 second at a time (18,000+ evaluations per 6 hours)
+- **Regular Mode**: 4-hour windows moving forward 5 minutes at a time
 - Eliminates lookahead bias by only showing data up to the current time
 - Matches live trading behavior exactly for realistic results
 - Fixes reset detection issues that occurred with full dataset processing
