@@ -118,7 +118,7 @@ class OptimizedInfluxClient:
                     mean(low) AS low,
                     mean(close) AS close,
                     sum(vbuy) + sum(vsell) AS volume
-                FROM "aggr_{timeframe}".trades_{timeframe}
+                FROM "aggr_1s".trades_1s
                 WHERE ({market_conditions})
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'
@@ -168,7 +168,7 @@ class OptimizedInfluxClient:
                     sum(csell) AS total_csell,
                     sum(lbuy) AS total_lbuy,
                     sum(lsell) AS total_lsell
-                FROM "aggr_{timeframe}".trades_{timeframe}
+                FROM "aggr_1s".trades_1s
                 WHERE ({market_conditions})
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'
@@ -185,7 +185,7 @@ class OptimizedInfluxClient:
                     sum(csell) AS total_csell,
                     sum(lbuy) AS total_lbuy,
                     sum(lsell) AS total_lsell
-                FROM "aggr_{timeframe}".trades_{timeframe}
+                FROM "aggr_1s".trades_1s
                 WHERE ({market_conditions})
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'

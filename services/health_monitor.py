@@ -582,14 +582,14 @@ class HealthMonitor:
             
             try:
                 # Query for data in last 5 minutes
-                query = 'SELECT COUNT(*) FROM "aggr_1m"."trades_1m" WHERE time > now() - 5m'
+                query = 'SELECT COUNT(*) FROM "aggr_1s"."trades_1s" WHERE time > now() - 5m'
                 result = list(self.influx_client.query(query).get_points())
                 if result:
                     recent_data_count = result[0].get('count', 0)
                     data_flow_healthy = recent_data_count > 100  # Expect at least 100 points in 5 min
                 
                 # Check for data gaps
-                query_latest = 'SELECT * FROM "aggr_1m"."trades_1m" ORDER BY time DESC LIMIT 1'
+                query_latest = 'SELECT * FROM "aggr_1s"."trades_1s" ORDER BY time DESC LIMIT 1'
                 result_latest = list(self.influx_client.query(query_latest).get_points())
                 if result_latest:
                     from dateutil import parser
@@ -692,14 +692,14 @@ class HealthMonitor:
             
             try:
                 # Query for recent data writes
-                query = 'SELECT COUNT(*) FROM "aggr_1m"."trades_1m" WHERE time > now() - 5m'
+                query = 'SELECT COUNT(*) FROM "aggr_1s"."trades_1s" WHERE time > now() - 5m'
                 result = list(self.influx_client.query(query).get_points())
                 if result:
                     recent_data_count = result[0].get('count', 0)
                     data_flow_healthy = recent_data_count > 100
                 
                 # Check latest write time
-                query_latest = 'SELECT * FROM "aggr_1m"."trades_1m" ORDER BY time DESC LIMIT 1'
+                query_latest = 'SELECT * FROM "aggr_1s"."trades_1s" ORDER BY time DESC LIMIT 1'
                 result_latest = list(self.influx_client.query(query_latest).get_points())
                 if result_latest:
                     from dateutil import parser

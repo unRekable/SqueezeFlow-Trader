@@ -93,7 +93,7 @@ class MarketDiscovery:
     def _get_series_list(self) -> List[str]:
         """Get list of all series from InfluxDB"""
         try:
-            query = 'SHOW SERIES FROM "aggr_1m"."trades_1m"'
+            query = 'SHOW SERIES FROM "aggr_1s"."trades_1s"'
             result = self.influx_client.query(query)
             
             series_list = []

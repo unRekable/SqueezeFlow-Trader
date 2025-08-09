@@ -133,8 +133,8 @@ class SymbolDiscovery:
         logger.info(f"🔍 Discovering symbols with >{min_data_points} data points in last {hours_lookback}h...")
         
         try:
-            # Get all available markets from trades_1m measurement
-            series_query = 'SHOW SERIES FROM trades_1m'
+            # Get all available markets from trades_1s measurement
+            series_query = 'SHOW SERIES FROM "aggr_1s"."trades_1s"'
             points = self._execute_influx_query(series_query)
             if points:
                 data = {"results": [{"series": [{"values": [[point['key']] for point in points]}]}]}
@@ -193,7 +193,7 @@ class SymbolDiscovery:
             
             query = f"""
             SELECT COUNT(close) as data_points
-            FROM "aggr_1m"."trades_1m"
+            FROM "aggr_1s"."trades_1s"
             WHERE ({market_filter})
             AND time > now() - {hours_lookback}h
             """
