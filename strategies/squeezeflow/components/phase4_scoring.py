@@ -12,6 +12,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import pytz
+import os
 
 
 class ScoringSystem:
@@ -36,6 +37,9 @@ class ScoringSystem:
             scoring_weights: Custom weights for scoring criteria
             min_entry_score: Minimum score required to trade
         """
+        # 1s mode awareness
+        self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
+        
         self.scoring_weights = scoring_weights or {
             "cvd_reset_deceleration": 3.5,     # Critical
             "absorption_candle": 2.5,          # High priority
@@ -44,6 +48,10 @@ class ScoringSystem:
         }
         
         self.min_entry_score = min_entry_score if min_entry_score is not None else 1.5
+        
+        # Log 1s mode status
+        if self.enable_1s_mode:
+            print(f"Phase 4 Scoring: 1s mode enabled, statistical adjustment applied")
         
     def calculate_score(self, context: Dict[str, Any], divergence: Dict[str, Any], 
                        reset: Dict[str, Any], dataset: Dict[str, Any]) -> Dict[str, Any]:

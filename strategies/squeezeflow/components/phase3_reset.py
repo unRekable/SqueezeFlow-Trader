@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import os
 
 
 class ResetDetection:
@@ -28,9 +29,22 @@ class ResetDetection:
         Initialize reset detection component
         
         Args:
-            reset_timeframes: Timeframes to analyze (default: ["5m", "15m", "30m"])
+            reset_timeframes: Timeframes to analyze (1s-aware)
         """
-        self.reset_timeframes = reset_timeframes or ["5m", "15m", "30m"]
+        # 1s mode awareness
+        self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
+        
+        if reset_timeframes is None:
+            if self.enable_1s_mode:
+                self.reset_timeframes = ["1s", "5m", "15m"]  # Include 1s for immediate reset detection
+            else:
+                self.reset_timeframes = ["5m", "15m", "30m"]  # Original
+        else:
+            self.reset_timeframes = reset_timeframes
+            
+        # Log 1s mode status
+        if self.enable_1s_mode:
+            print(f"Phase 3 Reset: 1s mode enabled, using timeframes: {self.reset_timeframes}")
         
     def detect_reset(self, dataset: Dict[str, Any], context: Dict[str, Any], divergence: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -117,7 +131,7 @@ class ResetDetection:
             return {'pattern': 'INSUFFICIENT_DATA', 'dominant_side': 'NONE'}
         
         # Recent movement analysis
-        lookback = 20
+        # Adjust lookback for 1s mode\n        lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
         if len(spot_cvd) >= lookback and len(futures_cvd) >= lookback:
             spot_pct_changes = spot_cvd.iloc[-lookback:].pct_change(fill_method=None)
             futures_pct_changes = futures_cvd.iloc[-lookback:].pct_change(fill_method=None)

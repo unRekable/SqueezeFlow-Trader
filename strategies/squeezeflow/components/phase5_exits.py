@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import os
 
 # Optional CVD baseline manager import for live trading
 try:
@@ -35,17 +36,24 @@ class ExitManagement:
     
     def __init__(self, cvd_baseline_manager: Optional['CVDBaselineManager'] = None, logger=None):
         """
-        Initialize exit management component
+        Initialize exit management component (1s-aware)
         
         Args:
             cvd_baseline_manager: Optional CVD baseline manager for live trading
             logger: Optional logger for debug output
         """
+        # 1s mode awareness
+        self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
+        
         self.cvd_baseline_manager = cvd_baseline_manager
         self.logger = logger
         if not self.logger:
             import logging
             self.logger = logging.getLogger(__name__)
+            
+        # Log 1s mode status
+        if self.enable_1s_mode:
+            print(f"Phase 5 Exits: 1s mode enabled, adjusted exit timing")
         
     def manage_exits(self, dataset: Dict[str, Any], position: Dict[str, Any], 
                     entry_analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -177,7 +185,7 @@ class ExitManagement:
         position_side = position.get('side', '').upper()
         
         # Calculate recent CVD trends
-        lookback = min(10, len(spot_cvd) // 2)
+        # Adjust lookback for 1s mode\n        lookback = min(10 if not self.enable_1s_mode else 600, len(spot_cvd) // 2)  # 10min in 1s mode
         spot_trend = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback]
         futures_trend = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback]
         

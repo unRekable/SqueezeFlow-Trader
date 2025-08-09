@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
 from datetime import datetime
+import os
 
 
 class ContextAssessment:
@@ -26,9 +27,18 @@ class ContextAssessment:
         Initialize context assessment component
         
         Args:
-            context_timeframes: Timeframes to analyze (default: ["30m", "1h", "4h"])
+            context_timeframes: Timeframes to analyze (1s-aware)
         """
-        self.context_timeframes = context_timeframes or ["30m", "1h", "4h"]
+        # 1s mode awareness
+        self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
+        
+        if context_timeframes is None:
+            if self.enable_1s_mode:
+                self.context_timeframes = ["15m", "30m", "1h"]  # Shorter for 1s mode
+            else:
+                self.context_timeframes = ["30m", "1h", "4h"]  # Original
+        else:
+            self.context_timeframes = context_timeframes
         
     def assess_context(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -85,10 +95,11 @@ class ContextAssessment:
             }
     
     def _analyze_volume_accumulation(self, spot_cvd: pd.Series, futures_cvd: pd.Series) -> Dict[str, Any]:
-        """Analyze sustained volume accumulation patterns"""
+        """Analyze sustained volume accumulation patterns (1s-aware)"""
         
-        # Calculate recent trends
-        lookback = min(100, len(spot_cvd) // 4)  # Use 25% of data or 100 periods
+        # Calculate recent trends with 1s mode adjustment
+        base_lookback = 100 if not self.enable_1s_mode else 6000  # 100min in 1s mode
+        lookback = min(base_lookback, len(spot_cvd) // 4)  # Use 25% of data or adjusted periods
         
         if len(spot_cvd) < lookback or len(futures_cvd) < lookback or lookback < 2:
             return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
@@ -133,8 +144,10 @@ class ContextAssessment:
         # Price trend analysis
         price_trend = self._calculate_price_trend(ohlcv)
         
-        # CVD trend analysis  
-        lookback = min(50, len(spot_cvd) // 2)
+        # CVD trend analysis with 1s mode adjustment
+        base_lookback = 50 if not self.enable_1s_mode else 3000  # 50min in 1s mode
+        lookback = min(base_lookback, len(spot_cvd) // 2)
+        
         if len(spot_cvd) > lookback and lookback > 0:
             spot_pct_change = spot_cvd.pct_change(lookback).iloc[-1]
             spot_momentum = spot_pct_change if not pd.isna(spot_pct_change) else 0
@@ -147,8 +160,9 @@ class ContextAssessment:
         else:
             futures_momentum = 0
         
-        # Recent divergence trend
-        recent_divergence = cvd_divergence.iloc[-20:].mean() if len(cvd_divergence) > 20 else 0
+        # Recent divergence trend with 1s mode adjustment
+        divergence_lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
+        recent_divergence = cvd_divergence.iloc[-divergence_lookback:].mean() if len(cvd_divergence) > divergence_lookback else 0
         
         # Determine squeeze type based on patterns
         if price_trend > 0 and spot_momentum > futures_momentum and recent_divergence > 0:

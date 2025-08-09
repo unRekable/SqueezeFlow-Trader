@@ -64,18 +64,30 @@ class BacktestDataLoader:
         if enable_streaming:
             logger.info(f"Streaming mode enabled: {max_memory_mb}MB limit, {chunk_size_hours}h chunks")
     
-    def load_1s_data(self, symbol, start_time, end_time):
+    def load_1s_data(self, symbol, start_time, end_time, enable_chunking=None):
         """
-        Load raw 1-second data from InfluxDB.
+        Load raw 1-second data from InfluxDB with adaptive chunking.
         
         Args:
             symbol: Trading symbol (e.g., 'BINANCE:btcusdt')
             start_time: Start time (ISO format string or datetime)
             end_time: End time (ISO format string or datetime)
+            enable_chunking: Override chunking behavior (None = auto-detect)
             
         Returns:
             DataFrame with 1-second OHLCV data
         """
+        # Determine chunking strategy
+        start_dt = start_time if isinstance(start_time, datetime) else datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        end_dt = end_time if isinstance(end_time, datetime) else datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        
+        duration_hours = (end_dt - start_dt).total_seconds() / 3600
+        should_chunk = enable_chunking if enable_chunking is not None else (self.enable_1s_chunking and duration_hours > 2)
+        
+        if should_chunk:
+            logger.info(f"Using chunked loading for 1s data ({duration_hours:.1f}h duration)")
+            return self._load_1s_data_chunked(symbol, start_dt, end_dt)
+        
         # Convert datetime objects to ISO format if needed
         if isinstance(start_time, datetime):
             start_time = start_time.isoformat() + 'Z'
@@ -331,8 +343,8 @@ class BacktestDataLoader:
         # Load fresh data
         try:
             if timeframe == '1s':
-                # Load 1s data and aggregate to required timeframe
-                df_1s = self.load_1s_data(symbol, start_time, end_time)
+                # Load 1s data and aggregate to required timeframe (with chunking enabled for large ranges)
+                df_1s = self.load_1s_data(symbol, start_time, end_time, enable_chunking=True)
                 if df_1s.empty:
                     return None
                 
@@ -458,6 +470,101 @@ class BacktestDataLoader:
                 }
         
         return quality
+    
+    def _load_1s_data_chunked(self, symbol, start_time, end_time):
+        """
+        Load 1-second data in chunks with retry logic to prevent timeouts.
+        
+        Args:
+            symbol: Trading symbol
+            start_time: Start datetime
+            end_time: End datetime
+            
+        Returns:
+            DataFrame with 1-second OHLCV data from all chunks
+        """
+        import time
+        
+        chunk_duration = timedelta(hours=self.chunk_size_hours)
+        all_dfs = []
+        current_start = start_time
+        total_chunks = int((end_time - start_time).total_seconds() / chunk_duration.total_seconds()) + 1
+        chunk_num = 0
+        
+        logger.info(f"Loading 1s data in {self.chunk_size_hours}h chunks for {symbol} ({total_chunks} total chunks)")
+        
+        while current_start < end_time:
+            chunk_num += 1
+            chunk_end = min(current_start + chunk_duration, end_time)
+            
+            # Progress indicator
+            progress = (chunk_num / total_chunks) * 100
+            logger.info(f"Loading chunk {chunk_num}/{total_chunks} ({progress:.1f}%): {current_start.strftime('%H:%M:%S')} to {chunk_end.strftime('%H:%M:%S')}")
+            
+            # Retry logic for each chunk
+            chunk_df = None
+            for retry in range(self.max_retries):
+                try:
+                    query = f"""
+                    SELECT open, high, low, close, volume 
+                    FROM trades_1s 
+                    WHERE market = '{symbol}' 
+                    AND time >= '{current_start.isoformat()}Z' 
+                    AND time <= '{chunk_end.isoformat()}Z'
+                    ORDER BY time ASC
+                    """
+                    
+                    result = self.influx.query(query)
+                    
+                    if result:
+                        # Convert to DataFrame
+                        chunk_df = pd.DataFrame(list(result.get_points()))
+                        
+                        if not chunk_df.empty:
+                            # Convert time column to datetime and set as index
+                            chunk_df['time'] = pd.to_datetime(chunk_df['time'])
+                            chunk_df.set_index('time', inplace=True)
+                            
+                            # Ensure numeric columns
+                            numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+                            for col in numeric_cols:
+                                if col in chunk_df.columns:
+                                    chunk_df[col] = pd.to_numeric(chunk_df[col], errors='coerce')
+                            
+                            all_dfs.append(chunk_df)
+                            logger.debug(f"✓ Loaded chunk {chunk_num}: {len(chunk_df)} rows")
+                        else:
+                            logger.debug(f"⚠ Empty chunk {chunk_num}")
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if retry < self.max_retries - 1:
+                        wait_time = (retry + 1) * 2  # Progressive backoff: 2s, 4s, 6s
+                        logger.warning(f"Retry {retry + 1}/{self.max_retries} for chunk {chunk_num} after {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Failed to load chunk {chunk_num} after {self.max_retries} retries: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all chunks
+        if all_dfs:
+            logger.info(f"Combining {len(all_dfs)} chunks...")
+            combined_df = pd.concat(all_dfs, axis=0).sort_index()
+            
+            # Remove duplicates that might occur at chunk boundaries
+            if len(combined_df) > 0:
+                initial_len = len(combined_df)
+                combined_df = combined_df[~combined_df.index.duplicated(keep='first')]
+                if len(combined_df) < initial_len:
+                    logger.debug(f"Removed {initial_len - len(combined_df)} duplicate rows at chunk boundaries")
+            
+            logger.info(f"✅ Combined chunked 1s data: {len(combined_df)} total rows")
+            return combined_df
+        else:
+            logger.warning("No data loaded from any chunk")
+            return pd.DataFrame()
     
     def _get_timedelta_from_tf(self, tf):
         """Convert timeframe string to timedelta."""

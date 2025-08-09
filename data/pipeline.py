@@ -141,9 +141,19 @@ class DataPipeline:
         # Check if we need to split the query based on date range
         date_diff = (end_time - start_time).days
         
-        # Use different chunk strategies based on timeframe
-        if timeframe == '1s' and date_diff > 0.1:  # 2.4 hours for 1s data
-            return self._load_ohlcv_data_chunked(all_markets, start_time, end_time, timeframe, chunk_hours=2)
+        # Use adaptive chunk strategies based on timeframe and data density
+        if timeframe == '1s':
+            # For 1s data: use 2-hour chunks if > 2.4 hours of data
+            if date_diff > 0.1:  # 0.1 days = 2.4 hours
+                return self._load_ohlcv_data_chunked_1s(all_markets, start_time, end_time, timeframe, chunk_hours=2)
+            else:
+                # Small range, load directly
+                return self.influx_client.get_ohlcv_data(
+                    markets=all_markets,
+                    start_time=start_time,
+                    end_time=end_time,
+                    timeframe=timeframe
+                )
         elif date_diff > 3:  # 3 days for regular timeframes
             return self._load_ohlcv_data_chunked(all_markets, start_time, end_time, timeframe)
         
@@ -177,10 +187,12 @@ class DataPipeline:
         # Check if we need to split the query based on date range
         date_diff = (end_time - start_time).days
         
-        # Load spot volume data
+        # Load spot volume data with adaptive chunking for 1s
         spot_df = pd.DataFrame()
         if spot_markets:
-            if date_diff > 3:
+            if timeframe == '1s' and date_diff > 0.1:  # 2.4 hours for 1s data
+                spot_df = self._load_volume_data_chunked_1s(spot_markets, start_time, end_time, timeframe, 'spot')
+            elif date_diff > 3:
                 spot_df = self._load_volume_data_chunked(spot_markets, start_time, end_time, timeframe, 'spot')
             else:
                 spot_df = self.influx_client.get_volume_data(
@@ -202,10 +214,12 @@ class DataPipeline:
                 }
                 spot_df = spot_df.rename(columns=column_mapping)
         
-        # Load futures volume data
+        # Load futures volume data with adaptive chunking for 1s
         futures_df = pd.DataFrame()
         if perp_markets:
-            if date_diff > 3:
+            if timeframe == '1s' and date_diff > 0.1:  # 2.4 hours for 1s data
+                futures_df = self._load_volume_data_chunked_1s(perp_markets, start_time, end_time, timeframe, 'futures')
+            elif date_diff > 3:
                 futures_df = self._load_volume_data_chunked(perp_markets, start_time, end_time, timeframe, 'futures')
             else:
                 futures_df = self.influx_client.get_volume_data(
@@ -529,6 +543,185 @@ class DataPipeline:
             logger.info(f"Combined {market_type} volume data: {len(combined_df)} total rows")
             return combined_df
         
+        return pd.DataFrame()
+    
+    def _load_ohlcv_data_chunked_1s(self, markets: List[str], start_time: datetime, 
+                                    end_time: datetime, timeframe: str, chunk_hours: int = 2,
+                                    max_retries: int = 3) -> pd.DataFrame:
+        """
+        Load OHLCV data in optimized chunks for 1-second timeframes with retry logic
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime  
+            timeframe: Timeframe (should be '1s')
+            chunk_hours: Hours per chunk (default 2 for 1s data)
+            max_retries: Maximum retries per chunk
+            
+        Returns:
+            Combined DataFrame from all chunks
+        """
+        import logging
+        import time
+        logger = logging.getLogger(__name__)
+        
+        chunk_duration = timedelta(hours=chunk_hours)
+        all_dfs = []
+        current_start = start_time
+        total_chunks = int((end_time - start_time).total_seconds() / chunk_duration.total_seconds()) + 1
+        chunk_num = 0
+        
+        logger.info(f"Loading 1s OHLCV data in {chunk_hours}h chunks for {len(markets)} markets ({total_chunks} total chunks)")
+        
+        while current_start < end_time:
+            chunk_num += 1
+            chunk_end = min(current_start + chunk_duration, end_time)
+            
+            # Progress indicator
+            progress = (chunk_num / total_chunks) * 100
+            logger.info(f"Processing chunk {chunk_num}/{total_chunks} ({progress:.1f}%): {current_start.strftime('%H:%M:%S')} to {chunk_end.strftime('%H:%M:%S')}")
+            
+            # Retry logic for each chunk
+            chunk_df = None
+            for retry in range(max_retries):
+                try:
+                    chunk_df = self.influx_client.get_ohlcv_data(
+                        markets=markets,
+                        start_time=current_start,
+                        end_time=chunk_end,
+                        timeframe=timeframe
+                    )
+                    
+                    if not chunk_df.empty:
+                        all_dfs.append(chunk_df)
+                        logger.debug(f"✓ Loaded 1s OHLCV chunk {chunk_num}: {len(chunk_df)} rows")
+                    else:
+                        logger.debug(f"⚠ Empty 1s OHLCV chunk {chunk_num}")
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        wait_time = (retry + 1) * 2  # Progressive backoff: 2s, 4s, 6s
+                        logger.warning(f"Retry {retry + 1}/{max_retries} for chunk {chunk_num} after {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Failed to load 1s OHLCV chunk {chunk_num} after {max_retries} retries: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all chunks with memory optimization
+        if all_dfs:
+            non_empty_dfs = [df for df in all_dfs if not df.empty]
+            if non_empty_dfs:
+                logger.info(f"Combining {len(non_empty_dfs)} 1s OHLCV chunks...")
+                combined_df = pd.concat(non_empty_dfs, axis=0).sort_index()
+                
+                # Remove duplicates that might occur at chunk boundaries
+                if len(combined_df) > 0:
+                    initial_len = len(combined_df)
+                    combined_df = combined_df[~combined_df.index.duplicated(keep='first')]
+                    if len(combined_df) < initial_len:
+                        logger.debug(f"Removed {initial_len - len(combined_df)} duplicate rows at chunk boundaries")
+                
+                logger.info(f"✅ Combined 1s OHLCV data: {len(combined_df)} total rows")
+                return combined_df
+            else:
+                logger.warning("All 1s OHLCV chunks were empty")
+                return pd.DataFrame()
+        
+        logger.warning("No 1s OHLCV data loaded from any chunk")
+        return pd.DataFrame()
+    
+    def _load_volume_data_chunked_1s(self, markets: List[str], start_time: datetime, 
+                                     end_time: datetime, timeframe: str, market_type: str,
+                                     chunk_hours: int = 2, max_retries: int = 3) -> pd.DataFrame:
+        """
+        Load volume data in optimized chunks for 1-second timeframes with retry logic
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime
+            timeframe: Timeframe (should be '1s')
+            market_type: 'spot' or 'futures' for logging
+            chunk_hours: Hours per chunk (default 2 for 1s data)
+            max_retries: Maximum retries per chunk
+            
+        Returns:
+            Combined DataFrame from all chunks
+        """
+        import logging
+        import time
+        logger = logging.getLogger(__name__)
+        
+        chunk_duration = timedelta(hours=chunk_hours)
+        all_dfs = []
+        current_start = start_time
+        total_chunks = int((end_time - start_time).total_seconds() / chunk_duration.total_seconds()) + 1
+        chunk_num = 0
+        
+        logger.info(f"Loading 1s {market_type} volume data in {chunk_hours}h chunks for {len(markets)} markets ({total_chunks} total chunks)")
+        
+        while current_start < end_time:
+            chunk_num += 1
+            chunk_end = min(current_start + chunk_duration, end_time)
+            
+            # Progress indicator
+            progress = (chunk_num / total_chunks) * 100
+            logger.info(f"Processing {market_type} chunk {chunk_num}/{total_chunks} ({progress:.1f}%): {current_start.strftime('%H:%M:%S')} to {chunk_end.strftime('%H:%M:%S')}")
+            
+            # Retry logic for each chunk
+            chunk_df = None
+            for retry in range(max_retries):
+                try:
+                    chunk_df = self.influx_client.get_volume_data(
+                        markets=markets,
+                        start_time=current_start,
+                        end_time=chunk_end,
+                        timeframe=timeframe
+                    )
+                    
+                    if not chunk_df.empty:
+                        all_dfs.append(chunk_df)
+                        logger.debug(f"✓ Loaded 1s {market_type} volume chunk {chunk_num}: {len(chunk_df)} rows")
+                    else:
+                        logger.debug(f"⚠ Empty 1s {market_type} volume chunk {chunk_num}")
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        wait_time = (retry + 1) * 2  # Progressive backoff: 2s, 4s, 6s
+                        logger.warning(f"Retry {retry + 1}/{max_retries} for {market_type} chunk {chunk_num} after {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Failed to load 1s {market_type} volume chunk {chunk_num} after {max_retries} retries: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all chunks with memory optimization
+        if all_dfs:
+            non_empty_dfs = [df for df in all_dfs if not df.empty]
+            if non_empty_dfs:
+                logger.info(f"Combining {len(non_empty_dfs)} 1s {market_type} volume chunks...")
+                combined_df = pd.concat(non_empty_dfs, axis=0).sort_index()
+                
+                # Remove duplicates that might occur at chunk boundaries
+                if len(combined_df) > 0:
+                    initial_len = len(combined_df)
+                    combined_df = combined_df[~combined_df.index.duplicated(keep='first')]
+                    if len(combined_df) < initial_len:
+                        logger.debug(f"Removed {initial_len - len(combined_df)} duplicate rows at chunk boundaries")
+                
+                logger.info(f"✅ Combined 1s {market_type} volume data: {len(combined_df)} total rows")
+                return combined_df
+            else:
+                logger.warning(f"All 1s {market_type} volume chunks were empty")
+                return pd.DataFrame()
+        
+        logger.warning(f"No 1s {market_type} volume data loaded from any chunk")
         return pd.DataFrame()
     
     def _split_volume_by_market_type(self, combined_volume_df: pd.DataFrame, 

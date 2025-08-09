@@ -141,6 +141,9 @@ services:
       - SQUEEZEFLOW_TIMEFRAME=1m
       - SQUEEZEFLOW_MIN_DATA_POINTS=40
       - SQUEEZEFLOW_LOG_LEVEL=DEBUG
+      # 1s Mode Configuration
+      - SQUEEZEFLOW_ENABLE_1S_MODE=true
+      - SQUEEZEFLOW_DATA_INTERVAL=1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0

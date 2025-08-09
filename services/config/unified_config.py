@@ -23,6 +23,10 @@ class UnifiedConfig:
     min_data_points: int
     log_level: str
     
+    # 1s Mode Configuration
+    enable_1s_mode: bool
+    data_interval: int
+    
     # Redis Settings
     redis_host: str
     redis_port: int
@@ -53,6 +57,10 @@ class UnifiedConfig:
             timeframe=os.getenv('SQUEEZEFLOW_TIMEFRAME', '5m'),
             min_data_points=int(os.getenv('SQUEEZEFLOW_MIN_DATA_POINTS', '40')),
             log_level=os.getenv('SQUEEZEFLOW_LOG_LEVEL', 'INFO'),
+            
+            # 1s Mode Configuration
+            enable_1s_mode=os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true',
+            data_interval=int(os.getenv('SQUEEZEFLOW_DATA_INTERVAL', '1')),
             
             # Redis Settings
             redis_host=os.getenv('REDIS_HOST', 'redis'),

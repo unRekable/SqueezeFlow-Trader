@@ -739,7 +739,8 @@ class OptimizedInfluxClient:
     
     async def get_1s_data_with_aggregation(self, markets: List[str], start_time: datetime,
                                          end_time: datetime, target_timeframe: str = '5m',
-                                         max_lookback_minutes: int = 30) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                                         max_lookback_minutes: int = 30, 
+                                         enable_chunking: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Get 1-second data and aggregate to target timeframe with limited lookback
         Optimized for real-time strategy processing
@@ -757,6 +758,14 @@ class OptimizedInfluxClient:
         try:
             # Limit lookback for real-time efficiency
             limited_start = max(start_time, end_time - timedelta(minutes=max_lookback_minutes))
+            
+            # Check if chunking is needed for large datasets
+            duration_hours = (end_time - limited_start).total_seconds() / 3600
+            should_chunk = enable_chunking and duration_hours > 2  # Chunk if > 2 hours
+            
+            if should_chunk:
+                self.logger.info(f"1s data chunking enabled for {duration_hours:.1f}h duration")
+                return await self._get_1s_data_chunked(markets, limited_start, end_time, target_timeframe)
             
             # Check if 1s data is available
             availability = await self._check_1s_data_availability(markets, limited_start, end_time)
@@ -861,6 +870,122 @@ class OptimizedInfluxClient:
         }
         
         return timeframe_mapping.get(timeframe, '5m')
+    
+    async def _get_1s_data_chunked(self, markets: List[str], start_time: datetime,
+                                  end_time: datetime, target_timeframe: str,
+                                  chunk_hours: int = 2, max_retries: int = 3) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Get 1s data using chunking strategy for large date ranges
+        
+        Args:
+            markets: List of markets to query
+            start_time: Start datetime
+            end_time: End datetime
+            target_timeframe: Target aggregation timeframe
+            chunk_hours: Hours per chunk
+            max_retries: Maximum retries per chunk
+            
+        Returns:
+            Tuple of (ohlcv_df, volume_df) aggregated to target timeframe
+        """
+        import time
+        
+        chunk_duration = timedelta(hours=chunk_hours)
+        all_ohlcv_dfs = []
+        all_volume_dfs = []
+        current_start = start_time
+        total_chunks = int((end_time - start_time).total_seconds() / chunk_duration.total_seconds()) + 1
+        chunk_num = 0
+        
+        self.logger.info(f"Chunked 1s data loading: {total_chunks} chunks of {chunk_hours}h each")
+        
+        while current_start < end_time:
+            chunk_num += 1
+            chunk_end = min(current_start + chunk_duration, end_time)
+            
+            # Progress indicator
+            progress = (chunk_num / total_chunks) * 100
+            self.logger.info(f"Loading 1s chunk {chunk_num}/{total_chunks} ({progress:.1f}%)")
+            
+            # Retry logic for each chunk
+            for retry in range(max_retries):
+                try:
+                    # Create market conditions
+                    market_conditions = " OR ".join([f"market = '{market}'" for market in markets[:10]])  # Limit markets per chunk
+                    
+                    # Convert timeframe to group by interval
+                    group_by_interval = self._convert_timeframe_to_interval(target_timeframe)
+                    
+                    # Query 1s OHLCV data with aggregation for this chunk
+                    ohlcv_query = self.query_templates['ohlcv_1s_data'].format(
+                        market_conditions=market_conditions,
+                        start_time=current_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        end_time=chunk_end.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        group_by_interval=group_by_interval
+                    )
+                    
+                    # Query 1s volume data with aggregation for this chunk
+                    volume_query = self.query_templates['volume_1s_data'].format(
+                        market_conditions=market_conditions,
+                        start_time=current_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        end_time=chunk_end.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        group_by_interval=group_by_interval
+                    )
+                    
+                    # Execute queries in parallel for this chunk
+                    chunk_results = await self.execute_batch_queries_async([
+                        (ohlcv_query, 'significant_trades'),
+                        (volume_query, 'significant_trades')
+                    ])
+                    
+                    chunk_ohlcv_df = chunk_results[0] if len(chunk_results) > 0 else pd.DataFrame()
+                    chunk_volume_df = chunk_results[1] if len(chunk_results) > 1 else pd.DataFrame()
+                    
+                    # Add successful chunks to collection
+                    if not chunk_ohlcv_df.empty:
+                        all_ohlcv_dfs.append(chunk_ohlcv_df)
+                        
+                    if not chunk_volume_df.empty:
+                        all_volume_dfs.append(chunk_volume_df)
+                    
+                    self.logger.debug(f"✓ Chunk {chunk_num}: {len(chunk_ohlcv_df)} OHLCV, {len(chunk_volume_df)} volume bars")
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        wait_time = (retry + 1) * 2  # Progressive backoff
+                        self.logger.warning(f"Retry {retry + 1}/{max_retries} for 1s chunk {chunk_num} after {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        self.logger.error(f"Failed to load 1s chunk {chunk_num} after {max_retries} retries: {e}")
+            
+            current_start = chunk_end
+        
+        # Combine all successful chunks
+        combined_ohlcv_df = pd.DataFrame()
+        combined_volume_df = pd.DataFrame()
+        
+        if all_ohlcv_dfs:
+            non_empty_ohlcv = [df for df in all_ohlcv_dfs if not df.empty]
+            if non_empty_ohlcv:
+                combined_ohlcv_df = pd.concat(non_empty_ohlcv, axis=0).sort_index()
+                # Remove duplicates at chunk boundaries
+                combined_ohlcv_df = combined_ohlcv_df[~combined_ohlcv_df.index.duplicated(keep='first')]
+                
+                # Aggregate across markets if multiple
+                if len(markets) > 1:
+                    combined_ohlcv_df = self._aggregate_ohlcv_data(combined_ohlcv_df)
+        
+        if all_volume_dfs:
+            non_empty_volume = [df for df in all_volume_dfs if not df.empty]
+            if non_empty_volume:
+                combined_volume_df = pd.concat(non_empty_volume, axis=0).sort_index()
+                # Remove duplicates at chunk boundaries
+                combined_volume_df = combined_volume_df[~combined_volume_df.index.duplicated(keep='first')]
+        
+        self.logger.info(f"✅ Chunked 1s data loading completed: {len(combined_ohlcv_df)} OHLCV, {len(combined_volume_df)} volume bars")
+        
+        return combined_ohlcv_df, combined_volume_df
     
     def close(self):
         """Close all connections and cleanup"""

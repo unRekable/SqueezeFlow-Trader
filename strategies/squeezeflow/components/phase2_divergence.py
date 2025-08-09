@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
 from datetime import datetime
+import os
 
 
 class DivergenceDetection:
@@ -26,9 +27,22 @@ class DivergenceDetection:
         Initialize divergence detection component
         
         Args:
-            divergence_timeframes: Timeframes to analyze (default: ["15m", "30m"])
+            divergence_timeframes: Timeframes to analyze (1s-aware)
         """
-        self.divergence_timeframes = divergence_timeframes or ["15m", "30m"]
+        # 1s mode awareness
+        self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
+        
+        if divergence_timeframes is None:
+            if self.enable_1s_mode:
+                self.divergence_timeframes = ["5m", "15m"]  # Shorter for 1s mode
+            else:
+                self.divergence_timeframes = ["15m", "30m"]  # Original
+        else:
+            self.divergence_timeframes = divergence_timeframes
+            
+        # Log 1s mode status
+        if self.enable_1s_mode:
+            print(f"Phase 2 Divergence: 1s mode enabled, using timeframes: {self.divergence_timeframes}")
         
     def detect_divergence(self, dataset: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -132,8 +146,9 @@ class DivergenceDetection:
         if len(spot_cvd) < 10:
             return {'pattern': 'INSUFFICIENT_DATA', 'spot_direction': 0, 'futures_direction': 0}
         
-        # Recent CVD movements
-        lookback = min(10, len(spot_cvd) // 2)
+        # Recent CVD movements with 1s mode adjustment
+        base_lookback = 10 if not self.enable_1s_mode else 600  # 10min in 1s mode
+        lookback = min(base_lookback, len(spot_cvd) // 2)
         
         if len(spot_cvd) < lookback or len(futures_cvd) < lookback or lookback < 1:
             return {'pattern': 'INSUFFICIENT_DATA', 'spot_direction': 0, 'futures_direction': 0}
@@ -186,11 +201,14 @@ class DivergenceDetection:
         From SqueezeFlow.md: "if recent swings were 200M, a 400M+ divergence is significant"
         """
         
-        if len(cvd_divergence) < 20:
+        # Adjust lookback for 1s mode
+        volume_lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
+        
+        if len(cvd_divergence) < volume_lookback:
             return {'is_significant': False, 'multiplier': 0, 'recent_avg': 0}
         
         # Recent divergence swings (absolute values)
-        recent_swings = cvd_divergence.iloc[-20:-1].abs()
+        recent_swings = cvd_divergence.iloc[-volume_lookback:-1].abs()
         recent_avg = recent_swings.mean()
         recent_max = recent_swings.max()
         
