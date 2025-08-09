@@ -413,9 +413,14 @@ class PNGPlotter:
                     label='CVD Divergence', alpha=0.8, zorder=2)
             ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5, zorder=1)
             
-            # Calculate statistics for divergence detection
-            divergence_mean = cvd_divergence.mean()
-            divergence_std = cvd_divergence.std()
+            # Calculate statistics for divergence detection (with NaN safety)
+            divergence_mean = cvd_divergence.mean() if not cvd_divergence.empty else 0
+            divergence_std = cvd_divergence.std() if not cvd_divergence.empty else 1
+            # Handle NaN cases
+            if pd.isna(divergence_mean):
+                divergence_mean = 0
+            if pd.isna(divergence_std) or divergence_std == 0:
+                divergence_std = 1
             upper_threshold = divergence_mean + 2 * divergence_std
             lower_threshold = divergence_mean - 2 * divergence_std
             
@@ -601,14 +606,21 @@ class PNGPlotter:
         rolling_std = divergence.rolling(window=window, center=True).std()
         
         # Detect significant divergences (>2 standard deviations)
-        for i in range(window, len(divergence) - window):
+        # Only process points where we have valid statistics
+        for i in range(len(divergence)):
+            # Skip if we don't have valid statistics at this point
             if pd.isna(rolling_mean.iloc[i]) or pd.isna(rolling_std.iloc[i]):
+                continue
+            
+            # Skip if std is too small (avoid division issues)
+            if rolling_std.iloc[i] < 1e-10:
                 continue
             
             current_div = divergence.iloc[i]
             mean_val = rolling_mean.iloc[i]
             std_val = rolling_std.iloc[i]
             
+            # Check for significant divergence
             if abs(current_div - mean_val) > 2 * std_val:
                 if current_div > mean_val:  # SPOT > FUTURES
                     divergences['bullish'].append(i)
@@ -634,10 +646,15 @@ class PNGPlotter:
         
         # Detect crossings through mean
         for i in range(1, len(cvd_divergence) - 1):
-            if pd.isna(rolling_mean.iloc[i]):
+            # Skip if we don't have valid mean values
+            if pd.isna(rolling_mean.iloc[i]) or pd.isna(rolling_mean.iloc[i-1]):
                 continue
             
-            prev_val = cvd_divergence.iloc[i-1] - rolling_mean.iloc[i-1] if not pd.isna(rolling_mean.iloc[i-1]) else 0
+            # Skip if divergence values are NaN
+            if pd.isna(cvd_divergence.iloc[i]) or pd.isna(cvd_divergence.iloc[i-1]):
+                continue
+            
+            prev_val = cvd_divergence.iloc[i-1] - rolling_mean.iloc[i-1]
             curr_val = cvd_divergence.iloc[i] - rolling_mean.iloc[i]
             
             # Check for zero crossing (reset)

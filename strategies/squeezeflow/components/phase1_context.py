@@ -55,9 +55,17 @@ class ContextAssessment:
         
         # Performance optimization: pre-calculate density factors
         self.density_factor = 60 if self.enable_1s_mode else 1
-        self.volume_lookback = 6000 if self.enable_1s_mode else 100  # 100 minutes equivalent
-        self.trend_lookback = 3000 if self.enable_1s_mode else 50   # 50 minutes equivalent
-        self.divergence_lookback = 1200 if self.enable_1s_mode else 20  # 20 minutes equivalent
+        
+        # Adaptive lookback periods - start small for warmup, grow to full size
+        # These are MAXIMUM lookback values
+        self.max_volume_lookback = 6000 if self.enable_1s_mode else 100  # 100 minutes equivalent
+        self.max_trend_lookback = 3000 if self.enable_1s_mode else 50   # 50 minutes equivalent
+        self.max_divergence_lookback = 1200 if self.enable_1s_mode else 20  # 20 minutes equivalent
+        
+        # Minimum lookback for basic functionality
+        self.min_volume_lookback = 60 if self.enable_1s_mode else 10
+        self.min_trend_lookback = 30 if self.enable_1s_mode else 5
+        self.min_divergence_lookback = 12 if self.enable_1s_mode else 2
         
     def assess_context(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -84,6 +92,11 @@ class ContextAssessment:
             
             if spot_cvd.empty or futures_cvd.empty or ohlcv.empty:
                 return self._empty_context()
+            
+            # Check if we have minimum data for basic analysis
+            min_required = self.min_volume_lookback
+            if len(spot_cvd) < min_required or len(futures_cvd) < min_required:
+                return self._warmup_context(len(spot_cvd), min_required)
                 
             # Analyze volume accumulation patterns
             volume_analysis = self._analyze_volume_accumulation(spot_cvd, futures_cvd)
@@ -124,12 +137,16 @@ class ContextAssessment:
         if spot_cvd.empty or futures_cvd.empty:
             return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
         
-        # Use optimized lookback with safety checks
-        lookback = min(self.volume_lookback, len(spot_cvd) // 4)
-        if lookback < 2:
-            lookback = min(len(spot_cvd), len(futures_cvd)) - 1
-            if lookback < 1:
-                return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
+        # Adaptive lookback: use what we have, up to maximum
+        data_length = min(len(spot_cvd), len(futures_cvd))
+        desired_lookback = min(self.max_volume_lookback, data_length // 2)
+        lookback = max(self.min_volume_lookback, desired_lookback)
+        
+        # Ensure we don't exceed available data
+        if lookback >= data_length:
+            lookback = max(2, data_length - 1)
+            if lookback < self.min_volume_lookback:
+                return {'trend': 'WARMUP_PERIOD', 'strength': 0}
         
         # Vectorized trend analysis for both series
         spot_analysis = vectorized_trend_analysis(spot_cvd, periods=[lookback])
@@ -181,18 +198,21 @@ class ContextAssessment:
         SHORT_SQUEEZE: Longs are being squeezed (price falling, futures heavy)
         """
         
+        # Adaptive lookback for trend analysis
+        data_length = min(len(spot_cvd), len(futures_cvd), len(ohlcv))
+        trend_lookback = min(self.max_trend_lookback, data_length // 2)
+        trend_lookback = max(self.min_trend_lookback, trend_lookback)
+        
+        if trend_lookback >= data_length:
+            return 'NEUTRAL'  # Not enough data yet
+        
         # Vectorized price trend analysis
-        price_analysis = vectorized_momentum_analysis(ohlcv, periods=[self.trend_lookback // self.density_factor])
+        price_analysis = vectorized_momentum_analysis(ohlcv, periods=[trend_lookback // self.density_factor])
         price_trend_score = price_analysis.get('momentum_score', 0)
         
-        # Use pre-calculated lookback periods
-        lookback = min(self.trend_lookback, len(spot_cvd) // 2)
-        if lookback < 1:
-            return 'NEUTRAL'
-        
         # Vectorized momentum analysis for both CVD series
-        spot_analysis = vectorized_trend_analysis(spot_cvd, periods=[lookback])
-        futures_analysis = vectorized_trend_analysis(futures_cvd, periods=[lookback])
+        spot_analysis = vectorized_trend_analysis(spot_cvd, periods=[trend_lookback])
+        futures_analysis = vectorized_trend_analysis(futures_cvd, periods=[trend_lookback])
         
         if not spot_analysis['trends'] or not futures_analysis['trends']:
             return 'NEUTRAL'
@@ -204,9 +224,11 @@ class ContextAssessment:
         spot_momentum = spot_analysis['trends'][spot_key]['pct_change']
         futures_momentum = futures_analysis['trends'][futures_key]['pct_change']
         
-        # Vectorized recent divergence calculation
-        divergence_lookback = min(self.divergence_lookback, len(cvd_divergence))
-        if divergence_lookback > 0:
+        # Adaptive divergence lookback
+        divergence_lookback = min(self.max_divergence_lookback, len(cvd_divergence))
+        divergence_lookback = max(self.min_divergence_lookback, divergence_lookback)
+        
+        if divergence_lookback > 0 and len(cvd_divergence) >= divergence_lookback:
             recent_divergence = np.mean(cvd_divergence.iloc[-divergence_lookback:].values)
         else:
             recent_divergence = 0
@@ -266,4 +288,16 @@ class ContextAssessment:
             'duration_potential': 'UNKNOWN',
             'market_bias': 'NEUTRAL',
             'error': 'Insufficient data for context assessment'
+        }
+    
+    def _warmup_context(self, current_length: int, required_length: int) -> Dict[str, Any]:
+        """Return warmup context during initial data collection"""
+        return {
+            'phase': 'CONTEXT_ASSESSMENT',
+            'squeeze_environment': 'NEUTRAL',
+            'volume_analysis': {'trend': 'WARMUP_PERIOD', 'strength': 0},
+            'duration_potential': 'UNKNOWN',
+            'market_bias': 'NEUTRAL',
+            'warmup_progress': f'{current_length}/{required_length} points collected',
+            'info': f'Warming up: need {required_length - current_length} more data points'
         }

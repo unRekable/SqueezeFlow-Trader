@@ -600,11 +600,14 @@ class BacktestEngine:
                                 trades_count += 1
                                 
                                 # Log trade immediately
+                                # Get signal quality from the order (not the executed result)
+                                signal_quality = order.get('signal_type', 'UNKNOWN')
+                                confidence = order.get('confidence', 0)
                                 self.logger.info(
                                     f"✅ {current_time.strftime('%Y-%m-%d %H:%M:%S')} - "
                                     f"{executed['side']} {executed.get('quantity', 0):.6f} "
                                     f"@ ${executed.get('price', 0):,.2f} "
-                                    f"({executed.get('signal_quality', 'UNKNOWN')})"
+                                    f"({signal_quality}, conf: {confidence:.1%})"
                                 )
                 
             except Exception as e:
