@@ -45,10 +45,9 @@ class ResetDetection:
         self.enable_1s_mode = os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true'
         
         if reset_timeframes is None:
-            if self.enable_1s_mode:
-                self.reset_timeframes = ["1s", "5m", "15m"]  # Include 1s for immediate reset detection
-            else:
-                self.reset_timeframes = ["5m", "15m", "30m"]  # Original
+            # Timeframes are analysis windows, NOT data resolution!
+            # 1s is the data granularity, not a timeframe to analyze
+            self.reset_timeframes = ["5m", "15m", "30m"]  # Analysis windows
         else:
             self.reset_timeframes = reset_timeframes
         

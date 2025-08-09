@@ -51,10 +51,11 @@ class SqueezeFlowConfig:
     enable_1s_mode: bool = field(default_factory=lambda: os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true')
     
     # Timeframes for multi-timeframe analysis (1s-aware)
-    primary_timeframe: str = field(default_factory=lambda: "1s" if os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true' else "5m")
-    reset_timeframes: List[str] = field(default_factory=lambda: ["1s", "5m", "15m"] if os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true' else ["5m", "15m", "30m"])  # Phase 3
-    divergence_timeframes: List[str] = field(default_factory=lambda: ["5m", "15m"] if os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true' else ["15m", "30m"])  # Phase 2
-    context_timeframes: List[str] = field(default_factory=lambda: ["15m", "30m", "1h"] if os.getenv('SQUEEZEFLOW_ENABLE_1S_MODE', 'false').lower() == 'true' else ["30m", "1h", "4h"])  # Phase 1
+    # IMPORTANT: 1s is DATA RESOLUTION, not a timeframe! Timeframes are analysis windows.
+    primary_timeframe: str = field(default_factory=lambda: "5m")  # Always use 5m as primary, regardless of data resolution
+    reset_timeframes: List[str] = field(default_factory=lambda: ["5m", "15m", "30m"])  # Phase 3 - analysis windows
+    divergence_timeframes: List[str] = field(default_factory=lambda: ["15m", "30m"])  # Phase 2 - analysis windows
+    context_timeframes: List[str] = field(default_factory=lambda: ["30m", "1h", "4h"])  # Phase 1 - analysis windows
     
     # Phase 4 Scoring Weights (from SqueezeFlow.md lines 145-171)
     scoring_weights: Dict[str, float] = field(default_factory=lambda: {

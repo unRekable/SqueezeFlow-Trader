@@ -177,6 +177,11 @@ class BacktestEngine:
         start_time = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
         end_time = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
         
+        # If end_date is the same as or after start_date, set end_time to end of day
+        # This ensures single-day backtests work correctly
+        if end_date >= start_date:
+            end_time = end_time.replace(hour=23, minute=59, second=59)
+        
         self.logger.info(f"🚀 Starting rolling window backtest: {symbol} from {start_date} to {end_date}")
         self.logger.info(f"💰 Initial balance: ${self.initial_balance:,.2f}")
         self.logger.info("🔄 Using 4-hour rolling windows with 5-minute steps")
