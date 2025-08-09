@@ -12,6 +12,16 @@ import numpy as np
 from typing import Dict, Any, List
 from datetime import datetime
 import os
+import sys
+
+# Import optimized statistics functions
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+from utils.statistics import (
+    rolling_divergence_analysis,
+    vectorized_momentum_analysis,
+    adaptive_significance_threshold,
+    set_1s_mode
+)
 
 
 class DivergenceDetection:
@@ -39,7 +49,16 @@ class DivergenceDetection:
                 self.divergence_timeframes = ["15m", "30m"]  # Original
         else:
             self.divergence_timeframes = divergence_timeframes
-            
+        
+        # Configure statistics processor for 1s mode
+        set_1s_mode(self.enable_1s_mode)
+        
+        # Performance optimization: pre-calculate parameters
+        self.density_factor = 60 if self.enable_1s_mode else 1
+        self.pattern_lookback = 600 if self.enable_1s_mode else 10    # 10 minutes equivalent
+        self.volume_lookback = 1200 if self.enable_1s_mode else 20    # 20 minutes equivalent
+        self.price_stability_periods = 600 if self.enable_1s_mode else 10  # 10 minutes equivalent
+        
         # Log 1s mode status
         if self.enable_1s_mode:
             print(f"Phase 2 Divergence: 1s mode enabled, using timeframes: {self.divergence_timeframes}")
@@ -105,84 +124,76 @@ class DivergenceDetection:
             }
     
     def _analyze_price_movement(self, ohlcv: pd.DataFrame) -> Dict[str, Any]:
-        """Analyze if price is stable, rising, or falling"""
+        """Analyze if price is stable, rising, or falling (optimized for 1s density)"""
         
-        if len(ohlcv) < 20:
+        if ohlcv.empty:
             return {'movement': 'UNKNOWN', 'stability': 0, 'trend': 0}
         
-        # Get close prices
-        close_col = 'close' if 'close' in ohlcv.columns else ohlcv.columns[3]
-        closes = ohlcv[close_col]
+        # Use vectorized momentum analysis
+        momentum_analysis = vectorized_momentum_analysis(ohlcv, periods=[self.price_stability_periods // self.density_factor])
         
-        # Recent price change (last 10 periods)
-        if len(closes) >= 10 and closes.iloc[-10] != 0:
-            recent_change = (closes.iloc[-1] - closes.iloc[-10]) / closes.iloc[-10]
-        else:
-            recent_change = 0
+        recent_change = momentum_analysis.get('momentum_score', 0)
         
-        # Price volatility (stability measure)
-        price_std = closes.iloc[-20:].pct_change(fill_method=None).std()
-        stability = 1 - min(price_std * 10, 1)  # Higher stability = lower volatility
+        # Use adaptive thresholds for movement classification
+        stable_threshold = adaptive_significance_threshold(pd.Series([recent_change]), 0.01)
+        rising_threshold = stable_threshold
         
-        # Determine movement type
-        if abs(recent_change) < 0.01:  # Less than 1% change
+        # Determine movement type with adaptive thresholds
+        if abs(recent_change) < stable_threshold:
             movement = 'STABLE'
-        elif recent_change > 0.01:
+        elif recent_change > rising_threshold:
             movement = 'RISING'
         else:
             movement = 'FALLING'
-            
+        
+        # Calculate stability from momentum analysis
+        stability = 1.0 - min(recent_change * 5, 1.0) if recent_change > 0 else 1.0
+        
         return {
             'movement': movement,
-            'stability': stability,
+            'stability': max(0.0, stability),
             'trend': recent_change,
-            'volatility': price_std
+            'exhausted': momentum_analysis.get('exhausted', False),
+            'momentum_trend': momentum_analysis.get('trend', 'UNKNOWN')
         }
     
     def _detect_cvd_patterns(self, spot_cvd: pd.Series, futures_cvd: pd.Series, 
                            cvd_divergence: pd.Series) -> Dict[str, Any]:
-        """Detect CVD leadership patterns"""
+        """Detect CVD leadership patterns (optimized for 1s density)"""
         
-        if len(spot_cvd) < 10:
+        if spot_cvd.empty or futures_cvd.empty:
             return {'pattern': 'INSUFFICIENT_DATA', 'spot_direction': 0, 'futures_direction': 0}
         
-        # Recent CVD movements with 1s mode adjustment
-        base_lookback = 10 if not self.enable_1s_mode else 600  # 10min in 1s mode
-        lookback = min(base_lookback, len(spot_cvd) // 2)
+        # Use optimized rolling divergence analysis
+        divergence_analysis = rolling_divergence_analysis(
+            spot_cvd, futures_cvd, window_size=self.pattern_lookback
+        )
         
-        if len(spot_cvd) < lookback or len(futures_cvd) < lookback or lookback < 1:
-            return {'pattern': 'INSUFFICIENT_DATA', 'spot_direction': 0, 'futures_direction': 0}
+        if divergence_analysis['pattern'] == 'INSUFFICIENT_DATA':
+            return {
+                'pattern': 'INSUFFICIENT_DATA',
+                'spot_direction': 0,
+                'futures_direction': 0,
+                'divergence_strength': 0,
+                'recent_divergence': 0
+            }
         
-        spot_change = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback]
-        futures_change = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback]
+        # Extract pattern information
+        pattern = divergence_analysis['pattern']
+        current_divergence = divergence_analysis['current_divergence']
+        z_score = divergence_analysis['z_score']
         
-        # Direction analysis
-        spot_direction = np.sign(spot_change)
-        futures_direction = np.sign(futures_change)
+        # Calculate direction indicators
+        spot_direction = 1 if current_divergence > 0 else -1 if current_divergence < 0 else 0
+        futures_direction = -spot_direction  # Opposite by definition of divergence
         
-        # Enhanced pattern identification with magnitude consideration
-        spot_magnitude = abs(spot_change)
-        futures_magnitude = abs(futures_change)
+        # Use lookback for change calculations with safety checks
+        lookback = min(self.pattern_lookback, len(spot_cvd) - 1)
+        if lookback < 1:
+            lookback = 1
         
-        if spot_direction > 0 and futures_direction < 0:
-            pattern = 'SPOT_LEADING_UP'  # Potential long squeeze setup
-        elif spot_direction < 0 and futures_direction > 0:
-            pattern = 'FUTURES_LEADING_UP'  # Potential short squeeze setup
-        elif spot_direction > 0 and futures_direction > 0:
-            pattern = 'BOTH_UP'
-        elif spot_direction < 0 and futures_direction < 0:
-            pattern = 'BOTH_DOWN'
-        elif spot_magnitude > futures_magnitude * 2 and spot_direction != 0:
-            # Spot dominant pattern (even if both same direction)
-            pattern = 'SPOT_LEADING_UP' if spot_direction > 0 else 'SPOT_LEADING_DOWN'
-        elif futures_magnitude > spot_magnitude * 2 and futures_direction != 0:
-            # Futures dominant pattern
-            pattern = 'FUTURES_LEADING_UP' if futures_direction > 0 else 'FUTURES_LEADING_DOWN'
-        else:
-            pattern = 'NEUTRAL'
-            
-        # Calculate divergence strength
-        divergence_strength = abs(spot_change - futures_change)
+        spot_change = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback-1] if len(spot_cvd) > lookback else 0
+        futures_change = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback-1] if len(futures_cvd) > lookback else 0
         
         return {
             'pattern': pattern,
@@ -190,46 +201,71 @@ class DivergenceDetection:
             'futures_direction': futures_direction,
             'spot_change': spot_change,
             'futures_change': futures_change,
-            'divergence_strength': divergence_strength,
-            'recent_divergence': cvd_divergence.iloc[-1] if not cvd_divergence.empty else 0
+            'divergence_strength': abs(current_divergence),
+            'recent_divergence': current_divergence,
+            'significance': divergence_analysis['significance'],
+            'z_score': z_score
         }
     
     def _analyze_volume_significance(self, cvd_divergence: pd.Series) -> Dict[str, Any]:
         """
         Analyze if current divergence is significantly larger than recent activity
+        (optimized vectorized version)
         
         From SqueezeFlow.md: "if recent swings were 200M, a 400M+ divergence is significant"
         """
         
-        # Adjust lookback for 1s mode
-        volume_lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
-        
-        if len(cvd_divergence) < volume_lookback:
+        if cvd_divergence.empty:
             return {'is_significant': False, 'multiplier': 0, 'recent_avg': 0}
         
-        # Recent divergence swings (absolute values)
-        recent_swings = cvd_divergence.iloc[-volume_lookback:-1].abs()
-        recent_avg = recent_swings.mean()
-        recent_max = recent_swings.max()
+        # Use pre-calculated lookback
+        volume_lookback = min(self.volume_lookback, len(cvd_divergence) - 1)
+        if volume_lookback < 1:
+            return {'is_significant': False, 'multiplier': 0, 'recent_avg': 0}
         
-        # Current divergence
+        # Vectorized calculations using numpy
+        recent_values = cvd_divergence.iloc[-volume_lookback-1:-1].values
         current_divergence = abs(cvd_divergence.iloc[-1])
         
-        # Calculate significance multiplier
+        if len(recent_values) == 0:
+            return {'is_significant': False, 'multiplier': 0, 'recent_avg': 0}
+        
+        # Vectorized statistical calculations
+        recent_abs = np.abs(recent_values)
+        recent_avg = np.mean(recent_abs)
+        recent_max = np.max(recent_abs)
+        recent_std = np.std(recent_abs)
+        
+        # Calculate significance using multiple methods
         if recent_avg > 0:
             multiplier = current_divergence / recent_avg
         else:
             multiplier = 0
-            
-        # Significant if current is 2x+ recent average or larger than recent max
-        is_significant = multiplier >= 2.0 or current_divergence > recent_max * 1.5
+        
+        # Z-score based significance (more robust for 1s data)
+        if recent_std > 0:
+            z_score = (current_divergence - recent_avg) / recent_std
+        else:
+            z_score = 0
+        
+        # Adaptive significance threshold
+        base_threshold = adaptive_significance_threshold(cvd_divergence, 2.0)
+        
+        # Multiple significance criteria
+        is_significant = (
+            multiplier >= base_threshold or 
+            current_divergence > recent_max * 1.5 or
+            abs(z_score) > 2.0  # Statistical significance
+        )
         
         return {
             'is_significant': is_significant,
             'multiplier': multiplier,
             'recent_avg': recent_avg,
             'recent_max': recent_max,
-            'current': current_divergence
+            'current': current_divergence,
+            'z_score': z_score,
+            'threshold_used': base_threshold
         }
     
     def _identify_setup_type(self, price_pattern: Dict[str, Any], 

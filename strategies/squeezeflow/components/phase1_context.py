@@ -12,6 +12,16 @@ import numpy as np
 from typing import Dict, Any, List
 from datetime import datetime
 import os
+import sys
+
+# Import optimized statistics functions
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+from utils.statistics import (
+    vectorized_trend_analysis,
+    vectorized_momentum_analysis,
+    set_1s_mode,
+    adaptive_significance_threshold
+)
 
 
 class ContextAssessment:
@@ -39,6 +49,15 @@ class ContextAssessment:
                 self.context_timeframes = ["30m", "1h", "4h"]  # Original
         else:
             self.context_timeframes = context_timeframes
+        
+        # Configure statistics processor for 1s mode
+        set_1s_mode(self.enable_1s_mode)
+        
+        # Performance optimization: pre-calculate density factors
+        self.density_factor = 60 if self.enable_1s_mode else 1
+        self.volume_lookback = 6000 if self.enable_1s_mode else 100  # 100 minutes equivalent
+        self.trend_lookback = 3000 if self.enable_1s_mode else 50   # 50 minutes equivalent
+        self.divergence_lookback = 1200 if self.enable_1s_mode else 20  # 20 minutes equivalent
         
     def assess_context(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -95,96 +114,120 @@ class ContextAssessment:
             }
     
     def _analyze_volume_accumulation(self, spot_cvd: pd.Series, futures_cvd: pd.Series) -> Dict[str, Any]:
-        """Analyze sustained volume accumulation patterns (1s-aware)"""
+        """Analyze sustained volume accumulation patterns (optimized for 1s density)"""
         
-        # Calculate recent trends with 1s mode adjustment
-        base_lookback = 100 if not self.enable_1s_mode else 6000  # 100min in 1s mode
-        lookback = min(base_lookback, len(spot_cvd) // 4)  # Use 25% of data or adjusted periods
-        
-        if len(spot_cvd) < lookback or len(futures_cvd) < lookback or lookback < 2:
+        if spot_cvd.empty or futures_cvd.empty:
             return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
-            
-        # Recent CVD changes - safe array access
-        spot_recent_slice = spot_cvd.iloc[-lookback:]
-        futures_recent_slice = futures_cvd.iloc[-lookback:]
         
-        if len(spot_recent_slice) < 2 or len(futures_recent_slice) < 2:
+        # Use optimized lookback with safety checks
+        lookback = min(self.volume_lookback, len(spot_cvd) // 4)
+        if lookback < 2:
+            lookback = min(len(spot_cvd), len(futures_cvd)) - 1
+            if lookback < 1:
+                return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
+        
+        # Vectorized trend analysis for both series
+        spot_analysis = vectorized_trend_analysis(spot_cvd, periods=[lookback])
+        futures_analysis = vectorized_trend_analysis(futures_cvd, periods=[lookback])
+        
+        if not spot_analysis['trends'] or not futures_analysis['trends']:
             return {'trend': 'INSUFFICIENT_DATA', 'strength': 0}
-            
-        spot_trend = spot_recent_slice.iloc[-1] - spot_recent_slice.iloc[0]
-        futures_trend = futures_recent_slice.iloc[-1] - futures_recent_slice.iloc[0]
         
-        # Volume imbalance analysis
-        total_volume_change = abs(spot_trend) + abs(futures_trend)
+        # Extract trend metrics
+        spot_key = list(spot_analysis['trends'].keys())[0]
+        futures_key = list(futures_analysis['trends'].keys())[0]
+        
+        spot_trend_data = spot_analysis['trends'][spot_key]
+        futures_trend_data = futures_analysis['trends'][futures_key]
+        
+        spot_change = spot_trend_data['pct_change'] * spot_cvd.iloc[-1] if spot_cvd.iloc[-1] != 0 else 0
+        futures_change = futures_trend_data['pct_change'] * futures_cvd.iloc[-1] if futures_cvd.iloc[-1] != 0 else 0
+        
+        # Vectorized dominance calculation
+        total_volume_change = abs(spot_change) + abs(futures_change)
         if total_volume_change > 0:
-            spot_dominance = abs(spot_trend) / total_volume_change
-            futures_dominance = abs(futures_trend) / total_volume_change
+            spot_dominance = abs(spot_change) / total_volume_change
+            futures_dominance = abs(futures_change) / total_volume_change
         else:
             spot_dominance = 0.5
             futures_dominance = 0.5
-            
+        
+        # Use adaptive thresholds for 1s mode
+        dominance_threshold = adaptive_significance_threshold(spot_cvd, 0.6)
+        
         return {
-            'spot_trend': spot_trend,
-            'futures_trend': futures_trend,
+            'spot_trend': spot_change,
+            'futures_trend': futures_change,
             'spot_dominance': spot_dominance,
             'futures_dominance': futures_dominance,
-            'trend': 'SPOT_DOMINATED' if spot_dominance > 0.6 else 'FUTURES_DOMINATED' if futures_dominance > 0.6 else 'BALANCED',
-            'strength': max(spot_dominance, futures_dominance)
+            'trend': 'SPOT_DOMINATED' if spot_dominance > dominance_threshold else 
+                    'FUTURES_DOMINATED' if futures_dominance > dominance_threshold else 'BALANCED',
+            'strength': max(spot_dominance, futures_dominance),
+            'trend_consistency': (spot_analysis['trend_consistency'] + futures_analysis['trend_consistency']) / 2
         }
     
     def _determine_squeeze_environment(self, spot_cvd: pd.Series, futures_cvd: pd.Series, 
                                      cvd_divergence: pd.Series, ohlcv: pd.DataFrame) -> str:
         """
         Determine if market is in SHORT_SQUEEZE or LONG_SQUEEZE environment
+        (optimized for 1s density)
         
         LONG_SQUEEZE: Shorts are being squeezed (price rising, spot leading)
         SHORT_SQUEEZE: Longs are being squeezed (price falling, futures heavy)
         """
         
-        # Price trend analysis
-        price_trend = self._calculate_price_trend(ohlcv)
+        # Vectorized price trend analysis
+        price_analysis = vectorized_momentum_analysis(ohlcv, periods=[self.trend_lookback // self.density_factor])
+        price_trend_score = price_analysis.get('momentum_score', 0)
         
-        # CVD trend analysis with 1s mode adjustment
-        base_lookback = 50 if not self.enable_1s_mode else 3000  # 50min in 1s mode
-        lookback = min(base_lookback, len(spot_cvd) // 2)
+        # Use pre-calculated lookback periods
+        lookback = min(self.trend_lookback, len(spot_cvd) // 2)
+        if lookback < 1:
+            return 'NEUTRAL'
         
-        if len(spot_cvd) > lookback and lookback > 0:
-            spot_pct_change = spot_cvd.pct_change(lookback).iloc[-1]
-            spot_momentum = spot_pct_change if not pd.isna(spot_pct_change) else 0
+        # Vectorized momentum analysis for both CVD series
+        spot_analysis = vectorized_trend_analysis(spot_cvd, periods=[lookback])
+        futures_analysis = vectorized_trend_analysis(futures_cvd, periods=[lookback])
+        
+        if not spot_analysis['trends'] or not futures_analysis['trends']:
+            return 'NEUTRAL'
+        
+        # Extract momentum values
+        spot_key = list(spot_analysis['trends'].keys())[0]
+        futures_key = list(futures_analysis['trends'].keys())[0]
+        
+        spot_momentum = spot_analysis['trends'][spot_key]['pct_change']
+        futures_momentum = futures_analysis['trends'][futures_key]['pct_change']
+        
+        # Vectorized recent divergence calculation
+        divergence_lookback = min(self.divergence_lookback, len(cvd_divergence))
+        if divergence_lookback > 0:
+            recent_divergence = np.mean(cvd_divergence.iloc[-divergence_lookback:].values)
         else:
-            spot_momentum = 0
-            
-        if len(futures_cvd) > lookback and lookback > 0:
-            futures_pct_change = futures_cvd.pct_change(lookback).iloc[-1]
-            futures_momentum = futures_pct_change if not pd.isna(futures_pct_change) else 0
-        else:
-            futures_momentum = 0
+            recent_divergence = 0
         
-        # Recent divergence trend with 1s mode adjustment
-        divergence_lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
-        recent_divergence = cvd_divergence.iloc[-divergence_lookback:].mean() if len(cvd_divergence) > divergence_lookback else 0
+        # Use adaptive thresholds for squeeze detection
+        momentum_threshold = adaptive_significance_threshold(spot_cvd, 0.01)
         
-        # Determine squeeze type based on patterns
-        if price_trend > 0 and spot_momentum > futures_momentum and recent_divergence > 0:
+        # Determine squeeze type with improved logic
+        price_rising = price_trend_score > momentum_threshold
+        price_falling = price_trend_score < -momentum_threshold
+        
+        if price_rising and spot_momentum > futures_momentum and recent_divergence > 0:
             return 'LONG_SQUEEZE'  # Shorts being squeezed
-        elif price_trend < 0 and futures_momentum > spot_momentum and recent_divergence < 0:
+        elif price_falling and futures_momentum > spot_momentum and recent_divergence < 0:
             return 'SHORT_SQUEEZE'  # Longs being squeezed
         else:
             return 'NEUTRAL'
     
     def _calculate_price_trend(self, ohlcv: pd.DataFrame) -> float:
-        """Calculate overall price trend"""
-        if ohlcv.empty or len(ohlcv) < 20:
+        """Calculate overall price trend (optimized vectorized version)"""
+        if ohlcv.empty:
             return 0
-            
-        # Get close prices
-        close_col = 'close' if 'close' in ohlcv.columns else ohlcv.columns[3]
-        closes = ohlcv[close_col]
         
-        # Simple trend: current vs 20 periods ago
-        if len(closes) < 20 or closes.iloc[-20] == 0:
-            return 0
-        return (closes.iloc[-1] - closes.iloc[-20]) / closes.iloc[-20]
+        # Use vectorized momentum analysis
+        analysis = vectorized_momentum_analysis(ohlcv)
+        return analysis.get('momentum_score', 0)
     
     def _assess_duration_potential(self, volume_analysis: Dict[str, Any]) -> str:
         """

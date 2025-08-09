@@ -12,6 +12,16 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import os
+import sys
+
+# Import optimized statistics functions
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+from utils.statistics import (
+    efficient_convergence_detection,
+    vectorized_momentum_analysis,
+    adaptive_significance_threshold,
+    set_1s_mode
+)
 
 
 class ResetDetection:
@@ -41,7 +51,16 @@ class ResetDetection:
                 self.reset_timeframes = ["5m", "15m", "30m"]  # Original
         else:
             self.reset_timeframes = reset_timeframes
-            
+        
+        # Configure statistics processor for 1s mode
+        set_1s_mode(self.enable_1s_mode)
+        
+        # Performance optimization: pre-calculate parameters
+        self.density_factor = 60 if self.enable_1s_mode else 1
+        self.unbalanced_lookback = 1200 if self.enable_1s_mode else 20     # 20 minutes equivalent
+        self.convergence_window = 600 if self.enable_1s_mode else 10       # 10 minutes equivalent
+        self.momentum_periods = [300, 600, 900] if self.enable_1s_mode else [5, 10, 15]  # Multiple timeframes
+        
         # Log 1s mode status
         if self.enable_1s_mode:
             print(f"Phase 3 Reset: 1s mode enabled, using timeframes: {self.reset_timeframes}")
@@ -125,25 +144,37 @@ class ResetDetection:
     
     def _detect_unbalanced_movement(self, spot_cvd: pd.Series, futures_cvd: pd.Series, 
                                   divergence: Dict[str, Any]) -> Dict[str, Any]:
-        """Identify price trends driven primarily by one CVD type"""
+        """Identify price trends driven primarily by one CVD type (optimized for 1s density)"""
         
-        if len(spot_cvd) < 20:
+        if spot_cvd.empty or futures_cvd.empty:
             return {'pattern': 'INSUFFICIENT_DATA', 'dominant_side': 'NONE'}
         
-        # Recent movement analysis
-        # Adjust lookback for 1s mode\n        lookback = 20 if not self.enable_1s_mode else 1200  # 20min in 1s mode
-        if len(spot_cvd) >= lookback and len(futures_cvd) >= lookback:
-            spot_pct_changes = spot_cvd.iloc[-lookback:].pct_change(fill_method=None)
-            futures_pct_changes = futures_cvd.iloc[-lookback:].pct_change(fill_method=None)
+        # Use pre-calculated lookback with safety checks
+        lookback = min(self.unbalanced_lookback, len(spot_cvd) - 1, len(futures_cvd) - 1)
+        if lookback < 1:
+            return {'pattern': 'INSUFFICIENT_DATA', 'dominant_side': 'NONE'}
+        
+        # Vectorized momentum calculations using numpy
+        if len(spot_cvd) > lookback and len(futures_cvd) > lookback:
+            # Get recent slices
+            spot_values = spot_cvd.iloc[-lookback:].values
+            futures_values = futures_cvd.iloc[-lookback:].values
             
-            # Handle NaN values from pct_change
-            spot_momentum = spot_pct_changes.dropna().mean() if not spot_pct_changes.dropna().empty else 0
-            futures_momentum = futures_pct_changes.dropna().mean() if not futures_pct_changes.dropna().empty else 0
+            # Vectorized percentage change calculations
+            spot_changes = np.diff(spot_values) / (spot_values[:-1] + 1e-8)
+            futures_changes = np.diff(futures_values) / (futures_values[:-1] + 1e-8)
+            
+            # Remove any inf/nan values
+            spot_changes = spot_changes[np.isfinite(spot_changes)]
+            futures_changes = futures_changes[np.isfinite(futures_changes)]
+            
+            spot_momentum = np.mean(spot_changes) if len(spot_changes) > 0 else 0
+            futures_momentum = np.mean(futures_changes) if len(futures_changes) > 0 else 0
         else:
             spot_momentum = 0
             futures_momentum = 0
         
-        # Determine dominance
+        # Vectorized dominance calculation
         total_momentum = abs(spot_momentum) + abs(futures_momentum)
         if total_momentum > 0:
             spot_dominance = abs(spot_momentum) / total_momentum
@@ -152,11 +183,14 @@ class ResetDetection:
             spot_dominance = 0.5
             futures_dominance = 0.5
         
+        # Use adaptive threshold for dominance detection
+        dominance_threshold = adaptive_significance_threshold(spot_cvd, 0.65)
+        
         # Identify dominant pattern
-        if spot_dominance > 0.65:
+        if spot_dominance > dominance_threshold:
             pattern = 'SPOT_DOMINATED'
             dominant_side = 'SPOT'
-        elif futures_dominance > 0.65:
+        elif futures_dominance > dominance_threshold:
             pattern = 'PERP_DOMINATED'
             dominant_side = 'PERP'
         else:
@@ -168,75 +202,49 @@ class ResetDetection:
             'dominant_side': dominant_side,
             'spot_dominance': spot_dominance,
             'futures_dominance': futures_dominance,
-            'is_unbalanced': pattern != 'BALANCED'
+            'is_unbalanced': pattern != 'BALANCED',
+            'momentum_strength': total_momentum,
+            'threshold_used': dominance_threshold
         }
     
     def _detect_convergence(self, spot_cvd: pd.Series, futures_cvd: pd.Series, 
                           cvd_divergence: pd.Series) -> Dict[str, Any]:
-        """Detect if SPOT and PERP CVD are converging"""
+        """Detect if SPOT and PERP CVD are converging (optimized version)"""
         
-        if len(cvd_divergence) < 10:
+        if cvd_divergence.empty:
             return {'converging': False, 'rate': 0, 'strength': 0}
         
-        # Calculate convergence rate
-        recent_divergence = cvd_divergence.iloc[-10:]
-        divergence_change = recent_divergence.diff()
-        convergence_rate = -divergence_change.mean()
-        
-        # Check if converging (divergence decreasing)
-        is_converging = convergence_rate > 0 and divergence_change.iloc[-3:].mean() < 0
-        
-        # Calculate convergence strength
-        initial_divergence = abs(cvd_divergence.iloc[-10])
-        current_divergence = abs(cvd_divergence.iloc[-1])
-        
-        if initial_divergence > 0:
-            convergence_strength = (initial_divergence - current_divergence) / initial_divergence
-        else:
-            convergence_strength = 0
-        
-        # Check threshold
-        convergence_strength_threshold = 0.2
+        # Use optimized convergence detection
+        convergence_analysis = efficient_convergence_detection(
+            cvd_divergence, window_size=self.convergence_window
+        )
         
         return {
-            'converging': is_converging and convergence_strength > convergence_strength_threshold,
-            'rate': convergence_rate,
-            'strength': convergence_strength,
-            'initial_divergence': initial_divergence,
-            'current_divergence': current_divergence,
-            'trend': 'CONVERGING' if is_converging else 'DIVERGING'
+            'converging': convergence_analysis['converging'],
+            'rate': convergence_analysis['rate'],
+            'strength': convergence_analysis['strength'],
+            'initial_divergence': abs(cvd_divergence.iloc[0]) if len(cvd_divergence) > 0 else 0,
+            'current_divergence': abs(cvd_divergence.iloc[-1]) if len(cvd_divergence) > 0 else 0,
+            'trend': convergence_analysis['trend']
         }
     
     def _detect_momentum_exhaustion(self, ohlcv: pd.DataFrame) -> Dict[str, Any]:
-        """Detect if price momentum is exhausting"""
+        """Detect if price momentum is exhausting (optimized vectorized version)"""
         
-        if len(ohlcv) < 20:
-            return {'exhausted': False, 'deceleration': 0}
+        if ohlcv.empty:
+            return {'exhausted': False, 'deceleration': False}
         
-        # Get close prices
-        close_col = 'close' if 'close' in ohlcv.columns else ohlcv.columns[3]
-        closes = ohlcv[close_col]
-        
-        # Calculate momentum over different periods
-        momentum_5 = closes.pct_change(5, fill_method=None).iloc[-1]
-        momentum_10 = closes.pct_change(10, fill_method=None).iloc[-1]
-        momentum_20 = closes.pct_change(20, fill_method=None).iloc[-1]
-        
-        # Check for deceleration
-        deceleration = abs(momentum_5) < abs(momentum_10) < abs(momentum_20)
-        
-        # Check for stagnation
-        recent_range = closes.iloc[-10:].max() - closes.iloc[-10:].min()
-        avg_range = closes.pct_change(fill_method=None).abs().mean() * closes.mean() * 10
-        is_stagnant = recent_range < avg_range * 0.5
+        # Use vectorized momentum analysis with multiple periods
+        momentum_analysis = vectorized_momentum_analysis(
+            ohlcv, periods=self.momentum_periods
+        )
         
         return {
-            'exhausted': deceleration or is_stagnant,
-            'deceleration': deceleration,
-            'stagnant': is_stagnant,
-            'momentum_5': momentum_5,
-            'momentum_10': momentum_10,
-            'momentum_20': momentum_20
+            'exhausted': momentum_analysis['exhausted'],
+            'deceleration': momentum_analysis['deceleration'],
+            'stagnant': momentum_analysis.get('stagnation', False),
+            'momentum_score': momentum_analysis['momentum_score'],
+            'trend': momentum_analysis['trend']
         }
     
     def _detect_reset_type_a(self, convergence: Dict[str, Any], 
@@ -264,7 +272,7 @@ class ResetDetection:
     
     def _detect_reset_type_b(self, ohlcv: pd.DataFrame, cvd_divergence: pd.Series) -> Dict[str, Any]:
         """
-        Detect Reset Type B - Explosive Confirmation
+        Detect Reset Type B - Explosive Confirmation (optimized vectorized version)
         
         Criteria:
         - Large price movement detected
@@ -272,62 +280,41 @@ class ResetDetection:
         - Volatility spike
         """
         
-        if len(ohlcv) < 10:
+        if ohlcv.empty:
             return {'detected': False, 'spike_magnitude': 0}
         
-        # Get price data
-        close_col = 'close' if 'close' in ohlcv.columns else ohlcv.columns[3]
-        high_col = 'high' if 'high' in ohlcv.columns else ohlcv.columns[1]
-        low_col = 'low' if 'low' in ohlcv.columns else ohlcv.columns[2]
+        # Use vectorized momentum analysis for volatility detection
+        momentum_analysis = vectorized_momentum_analysis(ohlcv)
         
+        # Get basic price metrics
+        close_col = 'close' if 'close' in ohlcv.columns else (ohlcv.columns[3] if len(ohlcv.columns) > 3 else ohlcv.columns[0])
         closes = ohlcv[close_col]
-        highs = ohlcv[high_col]
-        lows = ohlcv[low_col]
         
-        # Calculate recent volatility spike
-        if len(closes) >= 5:
-            recent_high = highs.iloc[-5:].max()
-            recent_low = lows.iloc[-5:].min()
-            recent_close_mean = closes.iloc[-5:].mean()
-            
-            if recent_close_mean != 0:
-                recent_range = (recent_high - recent_low) / recent_close_mean
-            else:
-                recent_range = 0
-        else:
-            recent_range = 0
-            
-        if len(closes) >= 20:
-            avg_high_low_diff = (highs - lows).iloc[-20:-5].mean()
-            avg_close_mean = closes.iloc[-20:-5].mean()
-            
-            if avg_close_mean != 0:
-                avg_range = avg_high_low_diff / avg_close_mean
-            else:
-                avg_range = 0.001  # Small non-zero value to prevent division by zero
-        else:
-            avg_range = 0.001
+        # Check for explosive price movements
+        price_spike = momentum_analysis['momentum_score'] > 0.03  # 3% move threshold
         
-        volatility_spike = recent_range > avg_range * 2.5
+        # Volatility spike detection from momentum analysis
+        volatility_spike = not momentum_analysis['exhausted'] and momentum_analysis['trend'] == 'STRONG'
         
-        # Check for large price movement
-        price_spike = abs(closes.pct_change(5, fill_method=None).iloc[-1]) > 0.03  # 3% move
-        
-        # Check for supporting CVD
-        if len(cvd_divergence) >= 5:
-            cvd_support = abs(cvd_divergence.iloc[-1]) > abs(cvd_divergence.iloc[-5]) * 1.5
+        # CVD support check with vectorized operations
+        if not cvd_divergence.empty and len(cvd_divergence) >= 5:
+            recent_cvd = cvd_divergence.iloc[-5:].values
+            cvd_support = abs(recent_cvd[-1]) > np.mean(np.abs(recent_cvd[:-1])) * 1.5
         else:
             cvd_support = False
         
-        detected = volatility_spike and (price_spike or cvd_support)
+        # Use adaptive threshold for detection
+        detection_threshold = adaptive_significance_threshold(closes, 0.5)
+        detected = (volatility_spike and (price_spike or cvd_support)) and momentum_analysis['momentum_score'] > detection_threshold
         
         return {
             'detected': detected,
-            'spike_magnitude': recent_range / avg_range if avg_range > 0 else 0,
+            'spike_magnitude': momentum_analysis['momentum_score'] / detection_threshold if detection_threshold > 0 else 0,
             'has_volatility_spike': volatility_spike,
             'has_price_spike': price_spike,
             'has_cvd_support': cvd_support,
-            'pattern': 'EXPLOSIVE_CONFIRMATION' if detected else 'NONE'
+            'pattern': 'EXPLOSIVE_CONFIRMATION' if detected else 'NONE',
+            'momentum_trend': momentum_analysis['trend']
         }
     
     def _check_timeframe_alignment(self, convergence: Dict[str, Any]) -> Dict[str, Any]:
