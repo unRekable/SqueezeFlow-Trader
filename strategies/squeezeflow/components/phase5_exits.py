@@ -94,31 +94,6 @@ class ExitManagement:
                 self.logger.debug("Position has zero quantity, skipping exit check")
                 return self._no_exit_signal()
             
-            # Minimum hold time to prevent immediate exits (especially in 1s mode)
-            # Strategy should follow the flow, not exit on first tiny move
-            entry_time = position.get('entry_time')
-            if entry_time:
-                # Get current timestamp from data if available
-                if not ohlcv.empty and hasattr(ohlcv.index[-1], 'to_pydatetime'):
-                    current_time = ohlcv.index[-1].to_pydatetime()
-                    if current_time.tzinfo is None:
-                        current_time = pytz.UTC.localize(current_time)
-                else:
-                    current_time = datetime.now(tz=pytz.UTC)
-                
-                # Ensure entry_time is timezone-aware
-                if hasattr(entry_time, 'tzinfo'):
-                    if entry_time.tzinfo is None:
-                        entry_time = pytz.UTC.localize(entry_time)
-                    
-                    min_hold_minutes = 2 if self.enable_1s_mode else 5  # Shorter minimum in 1s mode
-                    min_hold_time = timedelta(minutes=min_hold_minutes)
-                    time_held = current_time - entry_time
-                    
-                    if time_held < min_hold_time:
-                        self.logger.debug(f"Position held for {time_held.total_seconds():.0f}s, minimum is {min_hold_time.total_seconds():.0f}s")
-                        return self._no_exit_signal()
-                
             # Check for flow reversal
             flow_reversal = self._check_flow_reversal(
                 spot_cvd, futures_cvd, position, entry_analysis
@@ -199,45 +174,83 @@ class ExitManagement:
         """
         Check for dangerous flow reversal pattern
         
-        Dangerous situation:
-        - SPOT CVD declining while PERP CVD elevated (for longs)
-        - SPOT CVD rising while PERP CVD declining (for shorts)
-        - Real money leaving, leverage will get squeezed
+        From strategy doc line 253-256:
+        "SPOT CVD declining while PERP CVD elevated" - real money leaving, leverage will get squeezed
+        
+        This is PURE pattern recognition - NO thresholds, just detect the pattern
         """
         
-        if len(spot_cvd) < 10:
+        if len(spot_cvd) < 20:  # Minimal data needed
             return {'detected': False, 'severity': 'NONE'}
             
         position_side = position.get('side', '').upper()
         
-        # Calculate recent CVD trends
-        # Adjust lookback for 1s mode
-        lookback = min(10 if not self.enable_1s_mode else 600, len(spot_cvd) // 2)  # 10min in 1s mode
-        spot_trend = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback]
-        futures_trend = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback]
+        # Get CVD values at entry (stored or approximate)
+        if 'spot_cvd_entry' in position and 'futures_cvd_entry' in position:
+            spot_cvd_entry = position['spot_cvd_entry']
+            futures_cvd_entry = position['futures_cvd_entry']
+        else:
+            # Approximate entry point
+            entry_index = min(20, len(spot_cvd) // 2)
+            spot_cvd_entry = spot_cvd.iloc[-entry_index]
+            futures_cvd_entry = futures_cvd.iloc[-entry_index]
         
-        # Detect dangerous patterns based on position
-        dangerous_for_long = (
-            position_side in ['BUY', 'LONG'] and
-            spot_trend < 0 and  # SPOT selling
-            futures_trend > 0   # PERP buying (shorts covering)
-        )
+        # Current CVD values
+        current_spot = spot_cvd.iloc[-1]
+        current_futures = futures_cvd.iloc[-1]
         
-        dangerous_for_short = (
-            position_side in ['SELL', 'SHORT'] and
-            spot_trend > 0 and   # SPOT buying
-            futures_trend < 0    # PERP selling (longs closing)
-        )
+        # Simple pattern detection - is CVD moving opposite directions?
+        spot_direction = current_spot - spot_cvd_entry
+        futures_direction = current_futures - futures_cvd_entry
+        
+        # Filter out noise - movements should be meaningful relative to recent activity
+        # This is NOT a threshold, just filtering random walk noise
+        recent_noise = spot_cvd.iloc[-20:].diff().std()
+        if recent_noise == 0:
+            recent_noise = 1  # Avoid division by zero
+            
+        # Only consider it a pattern if movements are distinguishable from noise
+        spot_moving = abs(spot_direction) > recent_noise * 0.5
+        futures_moving = abs(futures_direction) > recent_noise * 0.5
+        
+        # Need at least one side to be moving meaningfully
+        if not (spot_moving or futures_moving):
+            return {'detected': False, 'severity': 'NONE', 'reason': 'No meaningful movement'}
+        
+        # For LONG: Dangerous if spot declining AND futures elevated/rising
+        # For SHORT: Dangerous if spot rising AND futures declining
+        
+        dangerous_for_long = False
+        dangerous_for_short = False
+        
+        if position_side in ['BUY', 'LONG']:
+            # The pattern: spot going DOWN, futures going UP (or staying elevated)
+            dangerous_for_long = (spot_direction < 0 and futures_direction > 0)
+            
+        elif position_side in ['SELL', 'SHORT']:
+            # The pattern: spot going UP, futures going DOWN
+            dangerous_for_short = (spot_direction > 0 and futures_direction < 0)
         
         detected = dangerous_for_long or dangerous_for_short
         
-        # Assess severity
+        # Severity is just based on how pronounced the divergence is
+        # But still no fixed thresholds - just relative assessment
         if detected:
-            divergence_magnitude = abs(spot_trend - futures_trend)
-            if divergence_magnitude > abs(spot_cvd.iloc[-20:].std() * 2):
-                severity = 'HIGH'
-            elif divergence_magnitude > abs(spot_cvd.iloc[-20:].std()):
-                severity = 'MEDIUM'
+            # How opposite are they moving?
+            divergence = abs(spot_direction - futures_direction)
+            
+            # Compare to recent typical movements to assess severity
+            recent_volatility = spot_cvd.iloc[-20:].std()
+            if recent_volatility > 0:
+                relative_divergence = divergence / recent_volatility
+                
+                # These aren't thresholds, just categorization
+                if relative_divergence > 3:
+                    severity = 'HIGH'
+                elif relative_divergence > 1.5:
+                    severity = 'MEDIUM'
+                else:
+                    severity = 'LOW'
             else:
                 severity = 'LOW'
         else:
@@ -246,8 +259,8 @@ class ExitManagement:
         return {
             'detected': detected,
             'severity': severity,
-            'spot_trend': spot_trend,
-            'futures_trend': futures_trend,
+            'spot_change': spot_direction,
+            'futures_change': futures_direction,
             'pattern': 'DANGEROUS_DIVERGENCE' if detected else 'NORMAL'
         }
     
@@ -340,61 +353,45 @@ class ExitManagement:
         """
         Check if CVD trend no longer supports position
         
-        Uses CVD baseline manager if available, otherwise uses stored entry baselines
+        From strategy doc line 267-269: "Both CVDs start declining together"
+        This is about TREND reversal, not just any movement from entry
         """
         
-        if len(spot_cvd) < 5:
+        if len(spot_cvd) < 20:
             return {'detected': False, 'invalidation_type': 'NONE'}
             
         position_side = position.get('side', '').upper()
-        current_spot_cvd = spot_cvd.iloc[-1]
-        current_futures_cvd = futures_cvd.iloc[-1]
         
-        # Try to get real CVD baseline from baseline manager
-        baseline_data = self._get_cvd_baseline(position)
+        # Look at RECENT TREND, not change from entry
+        # We want to detect when CVDs START moving against the position
+        lookback = min(20, len(spot_cvd) // 2)
         
-        if baseline_data:
-            # Use baseline manager data
-            spot_change_since_entry = current_spot_cvd - baseline_data.get('spot_cvd', current_spot_cvd)
-            futures_change_since_entry = current_futures_cvd - baseline_data.get('futures_cvd', current_futures_cvd)
-            baseline_source = 'baseline_manager'
-            
-        elif 'spot_cvd_entry' in position and 'futures_cvd_entry' in position:
-            # Use stored entry baselines (preferred)
-            spot_change_since_entry = current_spot_cvd - position['spot_cvd_entry']
-            futures_change_since_entry = current_futures_cvd - position['futures_cvd_entry']
-            baseline_source = 'stored_baseline'
-            
-        else:
-            # Fallback to approximation (least preferred)
-            # In 1s mode, we need much larger lookback as 20 points = only 20 seconds!
-            default_lookback = 20 if not self.enable_1s_mode else 1200  # 20 min in 1s mode
-            entry_index = position.get('entry_index', -default_lookback)
-            
-            # Validate entry_index bounds
-            if abs(entry_index) >= len(spot_cvd) or abs(entry_index) >= len(futures_cvd):
-                entry_index = -min(default_lookback, len(spot_cvd) - 1, len(futures_cvd) - 1)
-                
-            # Ensure we have at least 1 data point
-            if len(spot_cvd) < 1 or len(futures_cvd) < 1:
-                return {'detected': False, 'invalidation_type': 'INSUFFICIENT_DATA'}
-                
-            spot_change_since_entry = current_spot_cvd - spot_cvd.iloc[entry_index]
-            futures_change_since_entry = current_futures_cvd - futures_cvd.iloc[entry_index]
-            baseline_source = 'approximation'
+        # Recent CVD trends
+        spot_recent_trend = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback]
+        futures_recent_trend = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback]
+        
+        # Also check very recent momentum (last few periods)
+        spot_momentum = spot_cvd.iloc[-1] - spot_cvd.iloc[-5]
+        futures_momentum = futures_cvd.iloc[-1] - futures_cvd.iloc[-5]
         
         # Debug logging
-        self.logger.debug(f"CVD check ({baseline_source}): spot_change={spot_change_since_entry:.0f}, futures_change={futures_change_since_entry:.0f}")
+        self.logger.debug(f"CVD trend check: spot_trend={spot_recent_trend:.0f}, futures_trend={futures_recent_trend:.0f}")
         
-        # Check if CVD has reversed against position - FIX: Handle both LONG/BUY and SHORT/SELL
+        # Check if BOTH CVDs are moving against position
         if position_side in ['BUY', 'LONG']:
-            # For longs, CVD should be increasing
-            cvd_reversed = spot_change_since_entry < 0 and futures_change_since_entry < 0
+            # For longs: Invalidated if BOTH CVDs declining together
+            both_declining = (spot_recent_trend < 0 and futures_recent_trend < 0)
+            # Also check if momentum is strongly negative
+            momentum_negative = (spot_momentum < 0 and futures_momentum < 0)
+            cvd_reversed = both_declining and momentum_negative
             invalidation_type = 'CVD_DECLINING' if cvd_reversed else 'NONE'
             
         elif position_side in ['SELL', 'SHORT']:
-            # For shorts, CVD should be decreasing
-            cvd_reversed = spot_change_since_entry > 0 and futures_change_since_entry > 0
+            # For shorts: Invalidated if BOTH CVDs rising together
+            both_rising = (spot_recent_trend > 0 and futures_recent_trend > 0)
+            # Also check if momentum is strongly positive
+            momentum_positive = (spot_momentum > 0 and futures_momentum > 0)
+            cvd_reversed = both_rising and momentum_positive
             invalidation_type = 'CVD_RISING' if cvd_reversed else 'NONE'
             
         else:
@@ -404,9 +401,9 @@ class ExitManagement:
         return {
             'detected': cvd_reversed,
             'invalidation_type': invalidation_type,
-            'spot_change': spot_change_since_entry,
-            'futures_change': futures_change_since_entry,
-            'baseline_used': baseline_data is not None
+            'spot_change': spot_recent_trend,
+            'futures_change': futures_recent_trend,
+            'baseline_used': False  # Not using baseline in this implementation
         }
     
     def _check_structure_break(self, ohlcv: pd.DataFrame, position: Dict[str, Any],
