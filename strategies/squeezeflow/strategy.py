@@ -29,6 +29,13 @@ from strategies.squeezeflow.components.phase3_reset import ResetDetection
 from strategies.squeezeflow.components.phase4_scoring import ScoringSystem
 from strategies.squeezeflow.components.phase5_exits import ExitManagement
 
+# Import performance monitoring
+try:
+    from utils.performance_monitor import PerformanceMonitorIntegration, time_operation
+    PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    PERFORMANCE_MONITORING_AVAILABLE = False
+
 
 class SqueezeFlowStrategy(BaseStrategy):
     """
@@ -80,6 +87,12 @@ class SqueezeFlowStrategy(BaseStrategy):
         
         # Track positions we've already signaled exits for (to prevent duplicates)
         self.exit_signals_sent = set()
+        
+        # Initialize performance monitoring
+        self.performance_monitor = None
+        if PERFORMANCE_MONITORING_AVAILABLE:
+            # Use a separate monitor instance for strategy timing
+            self.performance_monitor = PerformanceMonitorIntegration(enable_monitoring=False)  # No system monitoring for strategy
         
     def set_cvd_baseline_manager(self, cvd_baseline_manager):
         """
@@ -147,15 +160,25 @@ class SqueezeFlowStrategy(BaseStrategy):
                 self.logger.debug(f"{symbol}: No position - running full entry evaluation")
                 
                 # Phase 1: Context Assessment (Market Intelligence)
-                context_result = self.phase1.assess_context(dataset)
+                if self.performance_monitor:
+                    with self.performance_monitor.timer("phase1_context", {"symbol": symbol}):
+                        context_result = self.phase1.assess_context(dataset)
+                else:
+                    context_result = self.phase1.assess_context(dataset)
+                    
                 results['phase_results']['phase1_context'] = context_result
                 
                 if context_result.get('error'):
                     self.logger.warning(f"Phase 1 error: {context_result['error']}")
                     return results
                     
-                # Phase 2: Divergence Detection (Setup Identification)  
-                divergence_result = self.phase2.detect_divergence(dataset, context_result)
+                # Phase 2: Divergence Detection (Setup Identification)
+                if self.performance_monitor:
+                    with self.performance_monitor.timer("phase2_divergence", {"symbol": symbol}):
+                        divergence_result = self.phase2.detect_divergence(dataset, context_result)
+                else:
+                    divergence_result = self.phase2.detect_divergence(dataset, context_result)
+                    
                 results['phase_results']['phase2_divergence'] = divergence_result
                 
                 if divergence_result.get('error'):
@@ -163,7 +186,12 @@ class SqueezeFlowStrategy(BaseStrategy):
                     return results
                     
                 # Phase 3: Reset Detection (Entry Timing)
-                reset_result = self.phase3.detect_reset(dataset, context_result, divergence_result)
+                if self.performance_monitor:
+                    with self.performance_monitor.timer("phase3_reset", {"symbol": symbol}):
+                        reset_result = self.phase3.detect_reset(dataset, context_result, divergence_result)
+                else:
+                    reset_result = self.phase3.detect_reset(dataset, context_result, divergence_result)
+                    
                 results['phase_results']['phase3_reset'] = reset_result
                 
                 if reset_result.get('error'):
@@ -171,9 +199,16 @@ class SqueezeFlowStrategy(BaseStrategy):
                     return results
                 
                 # Phase 4: Scoring System (New Entry Decision)
-                scoring_result = self.phase4.calculate_score(
-                    context_result, divergence_result, reset_result, dataset
-                )
+                if self.performance_monitor:
+                    with self.performance_monitor.timer("phase4_scoring", {"symbol": symbol}):
+                        scoring_result = self.phase4.calculate_score(
+                            context_result, divergence_result, reset_result, dataset
+                        )
+                else:
+                    scoring_result = self.phase4.calculate_score(
+                        context_result, divergence_result, reset_result, dataset
+                    )
+                    
                 results['phase_results']['phase4_scoring'] = scoring_result
                 
                 if scoring_result.get('error'):
@@ -266,9 +301,12 @@ class SqueezeFlowStrategy(BaseStrategy):
             # Use entry_analysis from position if available, otherwise use empty dict
             entry_analysis = position.get('entry_analysis', {})
             
-            exit_result = self.phase5.manage_exits(
-                dataset, position, entry_analysis
-            )
+            if self.performance_monitor:
+                with self.performance_monitor.timer("phase5_exits", {"symbol": dataset.get('symbol'), "position_id": position_id}):
+                    exit_result = self.phase5.manage_exits(dataset, position, entry_analysis)
+            else:
+                exit_result = self.phase5.manage_exits(dataset, position, entry_analysis)
+                
             results['phase_results'][f'phase5_exit_{position_id}'] = exit_result
             
             if exit_result.get('should_exit', False):

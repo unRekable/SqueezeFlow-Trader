@@ -16,6 +16,13 @@ import logging
 import time
 from dataclasses import dataclass
 
+# Import performance monitoring
+try:
+    from utils.performance_monitor import time_operation, get_global_monitor
+    PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    PERFORMANCE_MONITORING_AVAILABLE = False
+
 
 @dataclass
 class CVDResult:
@@ -466,9 +473,15 @@ class OptimizedCVDCalculator:
         cache_result = self._get_from_cache_threadsafe(cache_key, dataset)
         if cache_result:
             self.performance_stats['cache_hits'] += 1
+            # Record cache hit for performance monitoring
+            if PERFORMANCE_MONITORING_AVAILABLE:
+                get_global_monitor().record_cache_hit()
             return cache_result
         
         self.performance_stats['cache_misses'] += 1
+        # Record cache miss for performance monitoring  
+        if PERFORMANCE_MONITORING_AVAILABLE:
+            get_global_monitor().record_cache_miss()
         
         try:
             # Extract data
@@ -483,11 +496,25 @@ class OptimizedCVDCalculator:
                 self.logger.warning(f"Low data quality score: {quality_score:.2f}")
             
             # Perform CVD calculations (thread-safe, each operates on separate data)
-            spot_cvd = self._calculate_spot_cvd_optimized(spot_df)
-            futures_cvd = self._calculate_futures_cvd_optimized(futures_df)
-            divergence = self._calculate_divergence_optimized(spot_cvd, futures_cvd)
+            if PERFORMANCE_MONITORING_AVAILABLE:
+                monitor = get_global_monitor()
+                with monitor.timer("spot_cvd_calculation", {"data_points": len(spot_df)}):
+                    spot_cvd = self._calculate_spot_cvd_optimized(spot_df)
+                with monitor.timer("futures_cvd_calculation", {"data_points": len(futures_df)}):
+                    futures_cvd = self._calculate_futures_cvd_optimized(futures_df)
+                with monitor.timer("cvd_divergence_calculation", {"data_points": len(spot_cvd) + len(futures_cvd)}):
+                    divergence = self._calculate_divergence_optimized(spot_cvd, futures_cvd)
+            else:
+                spot_cvd = self._calculate_spot_cvd_optimized(spot_df)
+                futures_cvd = self._calculate_futures_cvd_optimized(futures_df)
+                divergence = self._calculate_divergence_optimized(spot_cvd, futures_cvd)
             
             calculation_time = time.time() - start_time
+            
+            # Record CVD calculation metrics for performance monitoring
+            if PERFORMANCE_MONITORING_AVAILABLE:
+                total_data_points = len(spot_df) + len(futures_df)
+                monitor.record_cvd_calculation(calculation_time * 1000, total_data_points)
             
             # Create result
             result = CVDResult(

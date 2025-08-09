@@ -43,6 +43,14 @@ try:
 except ImportError:
     CVDBaselineManager = None
 
+# Import performance monitoring
+try:
+    from utils.performance_monitor import PerformanceMonitorIntegration, time_operation
+    PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    PERFORMANCE_MONITORING_AVAILABLE = False
+    print("Warning: Performance monitoring not available")
+
 
 class BacktestEngine:
     """
@@ -66,13 +74,22 @@ class BacktestEngine:
     
     def __init__(self, initial_balance: float = 10000.0, leverage: float = 1.0, 
                  enable_1s_mode: bool = False, max_memory_gb: float = 8.0, 
-                 max_workers: int = None, enable_parallel: bool = True):
+                 max_workers: int = None, enable_parallel: bool = True,
+                 enable_performance_monitoring: bool = True):
         self.initial_balance = initial_balance
         self.leverage = leverage
         self.portfolio = Portfolio(initial_balance)
         self.data_pipeline = create_data_pipeline()
         self.logger = BacktestLogger()
         self.visualizer = BacktestVisualizer()
+        
+        # Initialize performance monitoring
+        self.performance_monitor = None
+        if enable_performance_monitoring and PERFORMANCE_MONITORING_AVAILABLE:
+            self.performance_monitor = PerformanceMonitorIntegration()
+            self.logger.info("🔍 Performance monitoring enabled")
+        else:
+            self.logger.info("⚠️ Performance monitoring disabled")
         
         # Parallel processing configuration
         self.enable_parallel = enable_parallel
@@ -172,12 +189,34 @@ class BacktestEngine:
             full_dataset = self._create_minimal_dataset_structure(symbol, timeframe, start_time, end_time)
         else:
             self.logger.info("📊 Loading complete raw market data...")
-            full_dataset = self.data_pipeline.get_complete_dataset(
-                symbol=symbol,
-                start_time=start_time,
-                end_time=end_time,
-                timeframe=timeframe
-            )
+            
+            # Time data loading with performance monitoring
+            data_load_timer = None
+            if self.performance_monitor:
+                data_load_timer = self.performance_monitor.timer("data_loading", {
+                    "symbol": symbol, "timeframe": timeframe, "mode": "regular"
+                })
+                data_load_timer.__enter__()
+                
+            try:
+                full_dataset = self.data_pipeline.get_complete_dataset(
+                    symbol=symbol,
+                    start_time=start_time,
+                    end_time=end_time,
+                    timeframe=timeframe
+                )
+                
+                # Record data loading metrics
+                if self.performance_monitor:
+                    data_points = full_dataset.get('metadata', {}).get('data_points', 0)
+                    self.performance_monitor.record_data_loading(
+                        data_load_timer.start_time and (time.perf_counter() - data_load_timer.start_time) * 1000 or 0,
+                        data_points
+                    )
+                    
+            finally:
+                if data_load_timer:
+                    data_load_timer.__exit__(None, None, None)
             
             # Validate data quality for regular mode
             quality = self.data_pipeline.validate_data_quality(full_dataset)
@@ -194,6 +233,15 @@ class BacktestEngine:
         else:
             self.logger.info("🧠 Running rolling window strategy analysis...")
         
+        # Time strategy processing
+        strategy_timer = None
+        if self.performance_monitor:
+            strategy_timer = self.performance_monitor.timer("strategy_processing", {
+                "symbol": symbol, "mode": "1s" if self.enable_1s_mode else "regular",
+                "parallel": self.enable_parallel
+            })
+            strategy_timer.__enter__()
+        
         try:
             if self.enable_1s_mode:
                 executed_orders = self._run_streaming_backtest(
@@ -207,6 +255,9 @@ class BacktestEngine:
         except Exception as e:
             self.logger.error(f"❌ Strategy processing failed: {e}")
             return self._create_failed_result(f"Strategy error: {e}")
+        finally:
+            if strategy_timer:
+                strategy_timer.__exit__(None, None, None)
         
         # Final memory cleanup
         self._cleanup_memory()
@@ -231,6 +282,10 @@ class BacktestEngine:
         # Log parallel processing statistics
         if self.enable_parallel:
             self._log_final_parallel_stats()
+            
+        # Generate performance report
+        if self.performance_monitor:
+            self._generate_performance_report(result)
         
         return result
     
@@ -305,6 +360,9 @@ class BacktestEngine:
                 self.logger.info(f"🔄 Progress: {iteration:,}/{total_iterations:,} ({progress_pct:.1f}%) - Window: {window_end.strftime('%Y-%m-%d %H:%M')}")
             
             try:
+                # Time window processing
+                window_start_time = time.perf_counter()
+                
                 # Create windowed dataset (only data up to current_time)
                 windowed_dataset = self._create_windowed_dataset(
                     full_dataset, window_start, window_end
@@ -322,6 +380,11 @@ class BacktestEngine:
                 
                 # Process strategy with windowed data (no future visibility)
                 strategy_result = self.strategy.process(windowed_dataset, portfolio_state)
+                
+                # Record window processing time
+                window_duration_ms = (time.perf_counter() - window_start_time) * 1000
+                if self.performance_monitor:
+                    self.performance_monitor.record_window_processing_time(window_duration_ms)
                 
                 if strategy_result and 'orders' in strategy_result:
                     orders = strategy_result['orders']
@@ -1043,6 +1106,103 @@ class BacktestEngine:
             
         except Exception as e:
             self.logger.warning(f"Failed to log parallel statistics: {e}")
+    
+    def _generate_performance_report(self, result: Dict):
+        """Generate comprehensive performance report"""
+        try:
+            self.logger.info("📊 Generating performance report...")
+            
+            # Generate performance report
+            report = self.performance_monitor.analyzer.generate_performance_report()
+            
+            # Log key performance metrics
+            summary = report.get('summary', {})
+            self.logger.info(f"🔍 Performance Summary:")
+            self.logger.info(f"   Total operations tracked: {summary.get('total_operations_tracked', 0)}")
+            self.logger.info(f"   Total measurements: {summary.get('total_measurements', 0)}")
+            self.logger.info(f"   Slow operations detected: {summary.get('slow_operations_detected', 0)}")
+            
+            # Log system performance
+            system_perf = report.get('system_performance', {})
+            if not system_perf.get('error'):
+                cpu_stats = system_perf.get('cpu_usage_percent', {})
+                memory_stats = system_perf.get('memory_usage_mb', {})
+                self.logger.info(f"   CPU usage: avg={cpu_stats.get('mean', 0):.1f}%, max={cpu_stats.get('max', 0):.1f}%")
+                self.logger.info(f"   Memory usage: avg={memory_stats.get('mean', 0):.0f}MB, max={memory_stats.get('max', 0):.0f}MB")
+            
+            # Log window processing performance
+            window_perf = report.get('window_processing', {})
+            if not window_perf.get('error'):
+                processing_stats = window_perf.get('processing_time_stats_ms', {})
+                self.logger.info(f"   Window processing: avg={processing_stats.get('mean', 0):.1f}ms, p95={processing_stats.get('p95', 0):.1f}ms")
+                self.logger.info(f"   Windows processed: {window_perf.get('total_windows_processed', 0)}")
+                self.logger.info(f"   Throughput: {window_perf.get('throughput_windows_per_minute', 0):.1f} windows/min")
+            
+            # Log bottlenecks
+            bottlenecks = report.get('bottlenecks', [])
+            if bottlenecks:
+                self.logger.warning(f"⚠️ Performance bottlenecks detected:")
+                for bottleneck in bottlenecks[:3]:  # Top 3
+                    self.logger.warning(f"   - {bottleneck['type']}: {bottleneck.get('operation_name', 'System')} ({bottleneck.get('severity', 'unknown')})")
+            else:
+                self.logger.info("✅ No significant performance bottlenecks detected")
+            
+            # Log recommendations
+            recommendations = report.get('recommendations', [])
+            if recommendations:
+                self.logger.info("💡 Performance recommendations:")
+                for rec in recommendations[:3]:  # Top 3
+                    self.logger.info(f"   - {rec}")
+            
+            # Save detailed report
+            try:
+                import json
+                from pathlib import Path
+                
+                report_dir = Path("data/performance_reports")
+                report_dir.mkdir(parents=True, exist_ok=True)
+                
+                report_file = report_dir / f"backtest_performance_{int(time.time())}.json"
+                
+                # Add backtest metadata to report
+                report['backtest_metadata'] = {
+                    'symbol': result.get('symbol'),
+                    'timeframe': result.get('timeframe'),
+                    'initial_balance': result.get('initial_balance'),
+                    'final_balance': result.get('final_balance'),
+                    'total_return': result.get('total_return'),
+                    'total_trades': result.get('total_trades'),
+                    'enable_1s_mode': self.enable_1s_mode,
+                    'enable_parallel': self.enable_parallel,
+                    'max_workers': self.max_workers
+                }
+                
+                with open(report_file, 'w') as f:
+                    json.dump(report, f, indent=2, default=str)
+                
+                self.logger.info(f"📄 Detailed performance report saved: {report_file}")
+                
+                # Generate performance charts if possible
+                chart_path = self.performance_monitor.generate_performance_chart("memory", str(report_dir / f"performance_chart_{int(time.time())}.png"))
+                if chart_path:
+                    self.logger.info(f"📊 Performance chart saved: {chart_path}")
+                
+            except Exception as e:
+                self.logger.warning(f"Could not save detailed performance report: {e}")
+            
+            # Add 1s vs regular mode comparison if applicable
+            comparison = self.performance_monitor.get_1s_vs_regular_comparison()
+            if comparison.get('data_available'):
+                self.logger.info("🔄 1s vs Regular Mode Performance Comparison:")
+                for mode, stats in comparison.items():
+                    if isinstance(stats, dict) and 'avg_duration_ms' in stats:
+                        self.logger.info(f"   {mode}: avg={stats['avg_duration_ms']:.1f}ms, throughput={stats['throughput_ops_per_min']:.1f} ops/min")
+                
+                for rec in comparison.get('recommendations', []):
+                    self.logger.info(f"   💡 {rec}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate performance report: {e}")
     
     def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
         """
