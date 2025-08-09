@@ -44,8 +44,8 @@ class Portfolio:
         self.transaction_history: List[Dict] = []
         
         # Risk parameters
-        self.max_position_size = 0.1  # 10% max per position
-        self.max_total_exposure = 0.5  # 50% max total exposure
+        self.max_position_size = 0.2  # 20% max per position (increased for meaningful PnL)
+        self.max_total_exposure = 0.6  # 60% max total exposure
         self.trading_fee = 0.001  # 0.1% trading fee
         
     def get_state(self) -> Dict:
@@ -358,9 +358,10 @@ class Portfolio:
             else:  # SHORT
                 pnl = (position_to_close.entry_price - price) * position_to_close.quantity
             
-            # Account for fees
+            # Account for fees (both entry and exit fees)
             closing_fees = position_to_close.quantity * price * self.trading_fee
-            net_pnl = pnl - closing_fees - position_to_close.fees_paid
+            total_fees = closing_fees + position_to_close.fees_paid  # Entry + exit fees
+            net_pnl = pnl - total_fees
             
             if self.close_position(position_key, price, timestamp):
                 return {
@@ -391,9 +392,10 @@ class Portfolio:
             else:  # SHORT
                 pnl = (position_to_close.entry_price - price) * position_to_close.quantity
             
-            # Account for fees
+            # Account for fees (both entry and exit fees)
             closing_fees = position_to_close.quantity * price * self.trading_fee
-            net_pnl = pnl - closing_fees - position_to_close.fees_paid
+            total_fees = closing_fees + position_to_close.fees_paid  # Entry + exit fees
+            net_pnl = pnl - total_fees
             
             if self.close_position(position_key, price, timestamp):
                 return {

@@ -10,7 +10,8 @@ Based on SqueezeFlow.md lines 229-249
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 import os
 
 # Optional CVD baseline manager import for live trading
@@ -92,6 +93,31 @@ class ExitManagement:
             if position.get('quantity', 0) == 0:
                 self.logger.debug("Position has zero quantity, skipping exit check")
                 return self._no_exit_signal()
+            
+            # Minimum hold time to prevent immediate exits (especially in 1s mode)
+            # Strategy should follow the flow, not exit on first tiny move
+            entry_time = position.get('entry_time')
+            if entry_time:
+                # Get current timestamp from data if available
+                if not ohlcv.empty and hasattr(ohlcv.index[-1], 'to_pydatetime'):
+                    current_time = ohlcv.index[-1].to_pydatetime()
+                    if current_time.tzinfo is None:
+                        current_time = pytz.UTC.localize(current_time)
+                else:
+                    current_time = datetime.now(tz=pytz.UTC)
+                
+                # Ensure entry_time is timezone-aware
+                if hasattr(entry_time, 'tzinfo'):
+                    if entry_time.tzinfo is None:
+                        entry_time = pytz.UTC.localize(entry_time)
+                    
+                    min_hold_minutes = 2 if self.enable_1s_mode else 5  # Shorter minimum in 1s mode
+                    min_hold_time = timedelta(minutes=min_hold_minutes)
+                    time_held = current_time - entry_time
+                    
+                    if time_held < min_hold_time:
+                        self.logger.debug(f"Position held for {time_held.total_seconds():.0f}s, minimum is {min_hold_time.total_seconds():.0f}s")
+                        return self._no_exit_signal()
                 
             # Check for flow reversal
             flow_reversal = self._check_flow_reversal(
@@ -192,13 +218,13 @@ class ExitManagement:
         
         # Detect dangerous patterns based on position
         dangerous_for_long = (
-            position_side == 'BUY' and
+            position_side in ['BUY', 'LONG'] and
             spot_trend < 0 and  # SPOT selling
             futures_trend > 0   # PERP buying (shorts covering)
         )
         
         dangerous_for_short = (
-            position_side == 'SELL' and
+            position_side in ['SELL', 'SHORT'] and
             spot_trend > 0 and   # SPOT buying
             futures_trend < 0    # PERP selling (longs closing)
         )
@@ -230,7 +256,8 @@ class ExitManagement:
         """
         Check if price breaks below entry range or reset low
         
-        Signals reset wasn't complete, needs bigger move
+        According to strategy doc: "Price breaks below entry range/reset low"
+        The reset low is where Phase 3 detected convergence/exhaustion
         """
         
         if len(ohlcv) < 5:
@@ -244,36 +271,56 @@ class ExitManagement:
         # Get entry price and position side
         entry_price = position.get('entry_price', 0)
         position_side = position.get('side', '').upper()
+        current_price = ohlcv[close_col].iloc[-1]
         
-        # Define entry range (approximate from entry)
-        entry_range_size = entry_price * 0.005  # 0.5% range
+        # Try to get the actual reset low/high from entry analysis
+        # This should be stored when Phase 3 detected the reset
+        reset_low = None
+        reset_high = None
         
-        # FIX: Handle both 'BUY' and 'LONG' for position side
+        if isinstance(entry_analysis, dict):
+            # Look for reset information from Phase 3
+            reset_info = entry_analysis.get('reset', {})
+            if reset_info:
+                reset_low = reset_info.get('reset_low')
+                reset_high = reset_info.get('reset_high')
+        
+        # If we don't have reset levels, use the price range around entry
+        # But adapt to current market volatility (not fixed %)
+        if reset_low is None or reset_high is None:
+            # Look at the market structure when we entered
+            lookback = min(20, len(ohlcv))
+            recent_lows = ohlcv[low_col].iloc[-lookback:]
+            recent_highs = ohlcv[high_col].iloc[-lookback:]
+            
+            # The reset range is the consolidation area before entry
+            # Use statistical approach to find significant levels
+            reset_low = recent_lows.quantile(0.25)  # 25th percentile of recent lows
+            reset_high = recent_highs.quantile(0.75)  # 75th percentile of recent highs
+        
+        # Check for range break based on position type
+        detected = False
+        break_type = 'NONE'
+        
         if position_side in ['BUY', 'LONG']:
-            # For longs, check if price breaks below entry range
-            range_low = entry_price - entry_range_size
-            current_price = ohlcv[close_col].iloc[-1]
-            recent_low = ohlcv[low_col].iloc[-5:].min()
-            
-            detected = current_price < range_low or recent_low < range_low * 0.995
-            break_type = 'BELOW_ENTRY' if detected else 'NONE'
+            # For longs, exit if price breaks below reset low
+            if current_price < reset_low:
+                detected = True
+                break_type = 'BELOW_RESET_LOW'
             
             # Debug logging
             if hasattr(self, 'logger'):
-                self.logger.debug(f"Range break check (LONG): current={current_price:.2f}, range_low={range_low:.2f}, detected={detected}")
+                self.logger.debug(f"Range break check (LONG): current={current_price:.2f}, reset_low={reset_low:.2f}, detected={detected}")
             
-        elif position_side in ['SELL', 'SHORT']:  # FIX: Handle both 'SELL' and 'SHORT'
-            # For shorts, check if price breaks above entry range
-            range_high = entry_price + entry_range_size
-            current_price = ohlcv[close_col].iloc[-1]
-            recent_high = ohlcv[high_col].iloc[-5:].max()
-            
-            detected = current_price > range_high or recent_high > range_high * 1.005
-            break_type = 'ABOVE_ENTRY' if detected else 'NONE'
+        elif position_side in ['SELL', 'SHORT']:
+            # For shorts, exit if price breaks above reset high
+            if current_price > reset_high:
+                detected = True
+                break_type = 'ABOVE_RESET_HIGH'
             
             # Debug logging
             if hasattr(self, 'logger'):
-                self.logger.debug(f"Range break check (SHORT): current={current_price:.2f}, range_high={range_high:.2f}, detected={detected}")
+                self.logger.debug(f"Range break check (SHORT): current={current_price:.2f}, reset_high={reset_high:.2f}, detected={detected}")
             
         else:
             detected = False
@@ -320,11 +367,13 @@ class ExitManagement:
             
         else:
             # Fallback to approximation (least preferred)
-            entry_index = position.get('entry_index', -20)
+            # In 1s mode, we need much larger lookback as 20 points = only 20 seconds!
+            default_lookback = 20 if not self.enable_1s_mode else 1200  # 20 min in 1s mode
+            entry_index = position.get('entry_index', -default_lookback)
             
             # Validate entry_index bounds
             if abs(entry_index) >= len(spot_cvd) or abs(entry_index) >= len(futures_cvd):
-                entry_index = -min(20, len(spot_cvd) - 1, len(futures_cvd) - 1)
+                entry_index = -min(default_lookback, len(spot_cvd) - 1, len(futures_cvd) - 1)
                 
             # Ensure we have at least 1 data point
             if len(spot_cvd) < 1 or len(futures_cvd) < 1:
@@ -385,17 +434,30 @@ class ExitManagement:
         structure_broken = False
         structure_type = 'INTACT'
         
-        if position_side == 'BUY':
-            # For longs, breaking below recent swing low is bearish
-            if current_price < swing_low * 0.998:  # Small buffer
+        # According to strategy doc: NO fixed thresholds, adapt to market personality
+        # Look for SIGNIFICANT structural breaks that invalidate the trade thesis
+        
+        # Calculate what's "normal" movement for current market
+        lookback_period = min(50, len(ohlcv))
+        recent_ranges = ohlcv[high_col].iloc[-lookback_period:] - ohlcv[low_col].iloc[-lookback_period:]
+        typical_range = recent_ranges.median()
+        
+        # A structural break means price has moved beyond normal market behavior
+        # This automatically adapts to quiet vs volatile markets
+        
+        if position_side in ['BUY', 'LONG']:
+            # For longs, structural break = breaking significantly below recent structure
+            # Not just any swing low, but a move that shows trend has changed
+            if current_price < swing_low - typical_range:
                 structure_broken = True
-                structure_type = 'SWING_LOW_BROKEN'
+                structure_type = 'SIGNIFICANT_BREAK_DOWN'
                 
-        elif position_side == 'SELL':
-            # For shorts, breaking above recent swing high is bullish
-            if current_price > swing_high * 1.002:  # Small buffer
+        elif position_side in ['SELL', 'SHORT']:
+            # For shorts, structural break = breaking significantly above recent structure
+            # Not just any swing high, but a move that shows trend has changed
+            if current_price > swing_high + typical_range:
                 structure_broken = True
-                structure_type = 'SWING_HIGH_BROKEN'
+                structure_type = 'SIGNIFICANT_BREAK_UP'
                 
         return {
             'detected': structure_broken,

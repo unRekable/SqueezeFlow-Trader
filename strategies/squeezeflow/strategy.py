@@ -406,7 +406,8 @@ class SqueezeFlowStrategy(BaseStrategy):
                 'signal_type': scoring_result.get('signal_quality', 'UNKNOWN'),
                 'confidence': scoring_result.get('confidence', 0),
                 'score': total_score,
-                'reasoning': scoring_result.get('reasoning', 'SqueezeFlow entry signal')
+                'reasoning': scoring_result.get('reasoning', 'SqueezeFlow entry signal'),
+                'scoring_result': scoring_result  # Store complete entry analysis for exit logic
             }
             
             # Add CVD data for baseline tracking if available

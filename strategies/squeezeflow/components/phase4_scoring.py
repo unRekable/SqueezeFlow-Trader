@@ -142,7 +142,11 @@ class ScoringSystem:
                 'should_trade': should_trade,
                 'direction': signal_info['direction'],
                 'reasoning': self._generate_reasoning(scores, reset),
-                'timestamp': datetime.now(tz=pytz.UTC)
+                'timestamp': datetime.now(tz=pytz.UTC),
+                # Include reset and divergence data for exit logic
+                'reset': reset,
+                'divergence': divergence,
+                'context': context
             }
             
         except Exception as e:
@@ -150,7 +154,11 @@ class ScoringSystem:
                 'phase': 'SCORING_DECISION',
                 'error': f'Scoring error: {str(e)}',
                 'total_score': 0,
-                'should_trade': False
+                'should_trade': False,
+                # Empty structures for consistency
+                'reset': {},
+                'divergence': {},
+                'context': {}
             }
     
     def _score_cvd_deceleration(self, spot_cvd: pd.Series, futures_cvd: pd.Series, 
@@ -435,12 +443,24 @@ class ScoringSystem:
             cvd_patterns = divergence.get('cvd_patterns', {})
             pattern = cvd_patterns.get('pattern', 'NEUTRAL')
             spot_direction = cvd_patterns.get('spot_direction', 0)
+            futures_direction = cvd_patterns.get('futures_direction', 0)
             
-            if pattern in ['SPOT_LEADING_UP', 'BOTH_UP'] or spot_direction > 0:
+            # Based on strategy doc:
+            # LONG: Spot CVD up (buying pressure from spot)
+            # SHORT: Futures CVD up (perp longs accumulating)
+            if pattern == 'SPOT_LEADING_UP' or (pattern == 'BOTH_UP' and spot_direction > futures_direction):
                 signal_type = 'LONG_SQUEEZE'
                 direction = 'LONG'
-            elif pattern in ['FUTURES_LEADING_UP', 'BOTH_DOWN'] or spot_direction < 0:
+            elif pattern == 'FUTURES_LEADING_UP' or (pattern == 'BOTH_DOWN' and futures_direction < spot_direction):
                 signal_type = 'SHORT_SQUEEZE' 
+                direction = 'SHORT'
+            elif spot_direction > 0 and spot_direction > abs(futures_direction):
+                # Spot buying dominates
+                signal_type = 'LONG_SQUEEZE'
+                direction = 'LONG'
+            elif futures_direction > 0 and futures_direction > abs(spot_direction):
+                # Futures buying dominates (shorts will be squeezed)
+                signal_type = 'SHORT_SQUEEZE'
                 direction = 'SHORT'
             else:
                 # QUATERNARY: Default to LONG for positive scores (common in bull markets)
@@ -497,5 +517,9 @@ class ScoringSystem:
             'signal_quality': 'INSUFFICIENT',
             'should_trade': False,
             'direction': 'NONE',
-            'error': 'Insufficient data for scoring'
+            'error': 'Insufficient data for scoring',
+            # Empty structures for consistency
+            'reset': {},
+            'divergence': {},
+            'context': {}
         }

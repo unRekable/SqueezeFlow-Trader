@@ -1651,9 +1651,11 @@ class BacktestEngine:
                 )
             
             if close_result:
-                self.logger.info(f"✅ Position closed successfully: {close_result}")
                 # Extract PnL from close_result for win/loss tracking
                 pnl = close_result.get('realized_pnl', 0)
+                self.logger.info(f"✅ Position closed successfully - PnL: ${pnl:.2f}")
+                self.logger.debug(f"   Close result details: {close_result}")
+                
                 return {
                     'symbol': symbol,
                     'side': f"EXIT_{side}",
@@ -1760,6 +1762,17 @@ class BacktestEngine:
         """Create backtest result summary"""
         portfolio_state = self.portfolio.get_state()
         
+        # Filter for EXIT orders only (they have PnL and represent complete trades)
+        exit_orders = [o for o in executed_orders if o.get('signal_type') == 'EXIT']
+        
+        # Count winning and losing trades from EXIT orders
+        winning_trades = len([o for o in exit_orders if o.get('pnl', 0) > 0])
+        losing_trades = len([o for o in exit_orders if o.get('pnl', 0) < 0])
+        total_closed_trades = len(exit_orders)  # Each EXIT represents a complete trade
+        
+        # Calculate total number of orders (for reporting)
+        total_orders = len(executed_orders)
+        
         return {
             'symbol': dataset['symbol'],
             'timeframe': dataset['timeframe'],
@@ -1768,10 +1781,11 @@ class BacktestEngine:
             'initial_balance': self.initial_balance,
             'final_balance': portfolio_state['total_value'],
             'total_return': ((portfolio_state['total_value'] - self.initial_balance) / self.initial_balance) * 100,
-            'total_trades': len(executed_orders),
-            'winning_trades': len([o for o in executed_orders if o.get('pnl', 0) > 0]),
-            'losing_trades': len([o for o in executed_orders if o.get('pnl', 0) < 0]),
-            'win_rate': (len([o for o in executed_orders if o.get('pnl', 0) > 0]) / max(len(executed_orders), 1)) * 100,
+            'total_trades': total_closed_trades,  # Number of complete trades (round trips)
+            'total_orders': total_orders,  # Total number of orders (entries + exits)
+            'winning_trades': winning_trades,
+            'losing_trades': losing_trades,
+            'win_rate': (winning_trades / max(total_closed_trades, 1)) * 100,
             'executed_orders': executed_orders,
             'portfolio_state': portfolio_state,
             'data_quality': self.data_pipeline.validate_data_quality(dataset),

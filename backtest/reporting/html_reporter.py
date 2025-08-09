@@ -459,7 +459,7 @@ class HTMLReporter:
                     <td class="{side_class}">{side}</td>
                     <td>{order.get('quantity', 0):.4f}</td>
                     <td>${order.get('price', 0):.2f}</td>
-                    <td class="{pnl_class}">${pnl:.2f}</td>
+                    <td class="{pnl_class}">${pnl:.4f}</td>
                     <td>{order.get('signal_type', 'N/A')}</td>
                     <td>{order.get('confidence', 0):.2f}</td>
                 </tr>
