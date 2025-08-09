@@ -588,19 +588,23 @@ class BacktestEngine:
                 if strategy_result and 'orders' in strategy_result:
                     orders = strategy_result['orders']
                     if orders:
-                        # Execute orders
-                        executed = self._execute_orders(orders, windowed_dataset, current_time)
-                        if executed:
-                            all_executed_orders.extend(executed)
-                            trades_count += len(executed)
+                        # Execute orders one by one
+                        for order in orders:
+                            # Add timestamp to order
+                            order['timestamp'] = current_time
                             
-                            # Log trades immediately
-                            for order in executed:
+                            # Execute the order
+                            executed = self._execute_order(order, windowed_dataset)
+                            if executed:
+                                all_executed_orders.append(executed)
+                                trades_count += 1
+                                
+                                # Log trade immediately
                                 self.logger.info(
                                     f"✅ {current_time.strftime('%Y-%m-%d %H:%M:%S')} - "
-                                    f"{order['side']} {order.get('quantity', 0):.6f} "
-                                    f"@ ${order.get('price', 0):,.2f} "
-                                    f"({order.get('signal_quality', 'UNKNOWN')})"
+                                    f"{executed['side']} {executed.get('quantity', 0):.6f} "
+                                    f"@ ${executed.get('price', 0):,.2f} "
+                                    f"({executed.get('signal_quality', 'UNKNOWN')})"
                                 )
                 
             except Exception as e:

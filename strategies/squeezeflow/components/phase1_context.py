@@ -106,6 +106,11 @@ class ContextAssessment:
             }
             
         except Exception as e:
+            # Silently handle common data issues during warmup
+            if "Weights sum to zero" in str(e) or "can't be normalized" in str(e):
+                # This happens when data is all zeros or empty - common during market close
+                return self._empty_context()
+            # Log other errors
             return {
                 'phase': 'CONTEXT_ASSESSMENT',
                 'error': f'Context assessment error: {str(e)}',
