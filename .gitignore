@@ -35,6 +35,7 @@ freqtrade/user_data/strategies/*_prod.py
 # InfluxDB data directories
 influxdb-data/
 influxdb-data-backup/
+influxdb-backup-*/
 data/influxdb/
 aggr-server/data/influxdb/
 
@@ -43,6 +44,7 @@ dump.rdb
 *.rdb
 redis-data/
 data/redis/
+persistence.json
 
 # SQLite databases
 *.db
@@ -462,3 +464,10 @@ performance_test_*.py
 # =============================================================================
 # END OF GITIGNORE
 # ==============================================================================
+# Backup directories
+aggr-server-backup-*/
+
+# Temporary and generated files
+backtest_results.png
+data/__force_rebuild__
+real_time_1s_implementation_guide.md

@@ -107,6 +107,13 @@ All intelligence from Phases 1-3 is consolidated into four scored criteria (10 p
 - **Market Psychology**: Market seeking equilibrium after imbalanced trend exhaustion
 - **Detection Criteria**: CVD convergence + price momentum loss = Reset detected
 
+**🔍 Convergence Detection with 1s Data**:
+- **5m window convergence**: Analyze 300 seconds of 1s CVD data for convergence patterns
+- **15m window convergence**: Analyze 900 seconds of 1s CVD data for convergence patterns
+- **30m window convergence**: Analyze 1,800 seconds of 1s CVD data for convergence patterns
+- **Key Point**: Larger timeframe convergence (30m) is worth more than shorter (5m) - same pattern, different window size
+- **The data is the same** (1s granularity), just analyzed over different time windows
+
 **Reset Type B - Explosive Confirmation**:
 - **Trigger**: Large price movement following convergence exhaustion pattern
 - **Pattern**: Major price move accompanied by supporting CVD movement
@@ -120,9 +127,11 @@ All intelligence from Phases 1-3 is consolidated into four scored criteria (10 p
 - Both patterns indicate equilibrium restoration moments
 
 **Multi-Timeframe Integration**:
-- **Cross-Validation**: Checks 5m, 15m, 30m timeframes for aligned convergence
-- **Signal Amplification**: Multi-timeframe alignment creates stronger entry signals
+- **Cross-Validation**: Checks 5m, 15m, 30m windows for convergence patterns
+- **Signal Amplification**: Multi-timeframe alignment creates stronger entry signals (but NOT required)
 - **Momentum Analysis**: Sustained momentum patterns and deceleration detection
+- **Scoring System**: Continuously track which windows show patterns - more alignment = higher score
+- **Not All Required**: Windows don't need to align simultaneously - scoring handles partial alignment
 
 ### 📊 Trading Interpretation - What Reset Detection Looks Like on Your Chart
 
@@ -154,6 +163,8 @@ All intelligence from Phases 1-3 is consolidated into four scored criteria (10 p
    - Wicks below but close above (selling pressure absorbed)
    - Volume confirmation on wick rejection
    - **Why Important**: Confirms real participants stepping in
+   - **With 1s Data**: Create 5m candles from 300 x 1s data points, wait for full candle close for simplicity
+   - **Future Enhancement**: May detect partial absorption patterns in real-time if needed
 
 ### Supporting Criteria (Nice to Have - Additional confidence)
 
@@ -257,25 +268,66 @@ PERP-Driven Rally → SPOT Convergence → Price Stagnation → Reset Detected
    - Both CVDs start declining together
    - Squeeze conditions weakening/reversing
 
-## Timeframe Hierarchy
+## Timeframe Hierarchy with 1-Second Data
+
+### Understanding Timeframes vs Data Windows
+
+**CRITICAL CONCEPT**: With 1s base data, "timeframes" represent analysis windows of 1s CVD data, not necessarily candle periods.
 
 ### Timeframe Assignments by Phase:
-- **Phase 1 (Context)**: 1h/4h - Identify dominant squeeze environment
-- **Phase 2 (Divergence)**: 15m/30m - Spot significant CVD imbalances
-- **Phase 3 (Reset)**: 5m/15m - Detect exhaustion patterns
-- **Phase 4 (Entry)**: 1m/5m - Precise entry timing and absorption patterns
-- **Phase 5 (Management)**: All timeframes - Monitor for exit conditions
 
-### How to Use Multiple Timeframes:
-1. **Start Wide**: Begin analysis with 4h/1h for market context
-2. **Zoom In**: Progress through shorter timeframes as you move through phases
-3. **Confirm Alignment**: Best trades show agreement across multiple timeframes
-4. **Monitor All**: During position management, watch all timeframes for changes
+#### Phase 1 (Context) - 30m/1h/4h Windows
+- **What it means**: Analyze 30min, 1hr, and 4hr windows of 1s CVD data
+- **Implementation**: Look at patterns in last 1,800/3,600/14,400 seconds of CVD
+- **Purpose**: Identify dominant squeeze environment over different time horizons
+- **NOT**: Creating 4h candles for CVD calculation
 
-### Practical Application:
-- **Strong Setup**: All timeframes align (4h context + 30m divergence + 5m reset)
-- **Medium Setup**: Most timeframes align, one may be neutral
-- **Weak Setup**: Only short timeframes show signals (be cautious)
+#### Phase 2 (Divergence) - 15m/30m Windows  
+- **What it means**: Analyze 15min and 30min windows of 1s CVD data
+- **Implementation**: Compare current vs recent 900/1,800 second CVD patterns
+- **Purpose**: Spot significant CVD imbalances relative to recent activity
+- **Candles**: May create 15m/30m candles for price structure only
+
+#### Phase 3 (Reset) - 5m/15m/30m Windows
+- **What it means**: Multi-window validation using 300/900/1,800 seconds of data
+- **Implementation**: Cross-validate convergence patterns across windows
+- **Purpose**: Detect exhaustion patterns with multi-timeframe confirmation
+- **Candles**: May create candles for visual pattern recognition
+
+#### Phase 4 (Entry) - 1s/5m Analysis
+- **What it means**: Real-time 1s CVD + 5min window analysis
+- **Implementation**: Monitor live 1s CVD while analyzing 300-second patterns
+- **Purpose**: Precise entry timing with absorption pattern detection
+- **Candles**: Create 5m candles for absorption pattern identification
+
+#### Phase 5 (Management) - All Windows
+- **What it means**: Monitor CVD across all time windows continuously
+- **Implementation**: Track 1s CVD with various lookback periods
+- **Purpose**: Dynamic exit based on flow changes at any scale
+
+### How to Use Multiple Timeframes with 1s Data:
+
+1. **CVD Analysis**: Always use raw 1s CVD data with different window sizes
+   ```python
+   cvd_4h = analyze_cvd(cvd_1s[-14400:])   # 4-hour window
+   cvd_1h = analyze_cvd(cvd_1s[-3600:])    # 1-hour window
+   cvd_30m = analyze_cvd(cvd_1s[-1800:])   # 30-min window
+   ```
+
+2. **Pattern Recognition**: Create candles when needed for price patterns
+   ```python
+   candles_5m = aggregate_1s_to_5m(data_1s)  # For absorption patterns
+   candles_15m = aggregate_1s_to_15m(data_1s) # For structure analysis
+   ```
+
+3. **Confirm Alignment**: Best trades show CVD agreement across multiple windows
+4. **Real-Time Monitoring**: 1s updates allow continuous pattern detection
+
+### Practical Application with 1s Data:
+- **Strong Setup**: CVD patterns align across 4h, 30m, and 5m windows of 1s data
+- **Medium Setup**: Most windows show patterns, one may be neutral
+- **Weak Setup**: Only short windows show signals (be cautious)
+- **Real-Time Advantage**: Detect patterns as they form, not after candle closes
 
 ## Qualitative Pattern Recognition System
 
@@ -288,10 +340,12 @@ The strategy employs qualitative pattern recognition that adapts to each market'
 ### Pattern Recognition Approach
 
 **Daily Market Baseline Discovery**:
-1. Analyze recent CVD activity patterns (last 24 hours)
-2. Determine current market "normal" behavior and typical swing sizes
-3. Identify current noise level vs significant movement patterns
+1. Analyze recent CVD activity patterns (last 24 hours of 1s data = 86,400 points)
+2. Determine current market "normal" behavior and typical swing sizes from the full window
+3. Identify current noise level vs significant movement patterns across all 1s data points
 4. Establish pattern recognition context for current trading session
+
+**IMPORTANT**: The analysis uses the FULL WINDOW of 1s data points. We don't need to create 24 hourly candles - we analyze all 86,400 seconds of data directly for better precision.
 
 **Qualitative Pattern Analysis**:
 - **Trend Shape Recognition**: Focus on convergence curvature and momentum characteristics
@@ -324,45 +378,88 @@ The strategy employs qualitative pattern recognition that adapts to each market'
 - **Daily Calibration**: Fresh baseline discovery each trading session
 
 
-## CVD Calculation Methodology
+## CVD Calculation Methodology - 1-Second Real-Time System
 
 ### Technical Implementation
-The strategy uses industry-standard Cumulative Volume Delta calculation:
+The strategy uses industry-standard Cumulative Volume Delta calculation with **1-second precision**:
 
-1. **Per-Minute Volume Delta**: Buy Volume - Sell Volume for each minute
-2. **Cumulative CVD**: Running total (cumsum) of all minute deltas over time
+1. **Per-Second Volume Delta**: Buy Volume - Sell Volume for each second
+2. **Cumulative CVD**: Running total (cumsum) of all 1-second deltas over time
 3. **Multi-Exchange Aggregation**: 
    - All SPOT exchanges aggregated into single SPOT CVD
    - All PERP exchanges aggregated into single FUTURES CVD
    - Uses `exchange_mapper.py` for automatic SPOT/PERP classification
 
+### 🚀 1-Second Base Data Architecture
+
+**CRITICAL UNDERSTANDING**: CVD is ALWAYS calculated from raw 1-second data for maximum precision. We never aggregate data just to calculate CVD - that would reduce precision with no benefit.
+
+**Base Data**: `trades_1s` - Raw 1-second data from exchanges (via aggr-server)
+
+**CVD Calculation Flow**:
+```
+1s raw data → CVD calculation every second → Most precise CVD possible
+```
+
+### Timeframe Analysis with 1s CVD
+
+**Key Principle**: When the strategy references timeframes (5m, 15m, 30m, 1h, 4h), it means analyzing windows of 1-second CVD data:
+
+- **Phase 1 (4h context)**: Analyze 14,400 seconds of 1s CVD data
+- **Phase 2 (30m divergence)**: Analyze 1,800 seconds of 1s CVD data  
+- **Phase 3 (15m reset)**: Analyze 900 seconds of 1s CVD data
+- **Phase 4 (5m entry)**: Analyze 300 seconds of 1s CVD data
+
+**Example**:
+```python
+# "4h context" means looking at 4 hours worth of 1s CVD data
+cvd_context = cvd_1s_data[-14400:]  # Last 14,400 seconds
+# NOT creating 4h candles and calculating CVD on those
+```
+
+### Candle Generation for Pattern Recognition
+
+While CVD is always from 1s data, we DO create candles for price pattern analysis:
+
+**Candle Creation** (when needed for patterns):
+- 1m candles: Aggregate 60 x 1s candles
+- 5m candles: Aggregate 300 x 1s candles
+- 15m candles: Aggregate 900 x 1s candles
+- 30m candles: Aggregate 1,800 x 1s candles
+- 1h candles: Aggregate 3,600 x 1s candles
+
+**Usage**:
+- **Absorption candles**: Create 5m candles to identify wicks and closes
+- **Price structure**: Create appropriate timeframe candles for visual patterns
+- **BUT**: CVD remains calculated from underlying 1s data
+
 ### Pre-Aggregated Timeframes in InfluxDB
-The database automatically maintains higher timeframes via Continuous Queries:
 
-**Base Data**: `aggr_1m.trades_1m` - Raw 1-minute data from exchanges
+**Continuous Queries** (Direct aggregation - NO CHAINING):
+- `cq_1m`: Aggregates 60 x 1s data points → 1m candles
+- `cq_5m`: Aggregates 300 x 1s data points → 5m candles  
+- `cq_15m`: Aggregates 900 x 1s data points → 15m candles
+- `cq_30m`: Aggregates 1,800 x 1s data points → 30m candles
+- `cq_1h`: Aggregates 3,600 x 1s data points → 1h candles
+- `cq_4h`: Aggregates 14,400 x 1s data points → 4h candles
 
-**Continuous Queries** (Auto-updated):
-- `cq_5m`: Creates `aggr_5m.trades_5m` - 5-minute aggregation
-- `cq_15m`: Creates `aggr_15m.trades_15m` - 15-minute aggregation
-- `cq_30m`: Creates `aggr_30m.trades_30m` - 30-minute aggregation
-- `cq_1h`: Creates `aggr_1h.trades_1h` - 1-hour aggregation
-- `cq_4h`: Creates `aggr_4h.trades_4h` - 4-hour aggregation
+**Why Direct Aggregation**: More efficient and accurate - no compound rounding errors from chaining
 
 **Key Fields Maintained**:
-- OHLC: `open`, `high`, `low`, `close`
-- Volume: `vbuy`, `vsell` (for CVD calculation)
+- OHLC: `open`, `high`, `low`, `close` (for price patterns)
+- Volume: `vbuy`, `vsell` (summed from 1s data)
 - Counts: `cbuy`, `csell`, `lbuy`, `lsell`
 
 ### Implementation References
-- **CVD Calculation**: See `utils/cvd_analysis_tool.py`
+- **CVD Calculation**: See `utils/cvd_analysis_tool.py` - operates on 1s data
 - **Exchange Classification**: See `data/processors/exchange_mapper.py`
-- **Database Structure**: InfluxDB with retention policies and continuous queries
+- **Database Structure**: InfluxDB with 1s base data and continuous queries
 
-### Why This Matters
-- **Performance**: Direct queries to pre-aggregated data (10x faster)
-- **Consistency**: Same CVD values in backtest and live trading
-- **No Resampling**: Query `aggr_15m.trades_15m` directly for 15m CVD
-- **Automatic Updates**: Continuous queries maintain all timeframes
+### Why This 1s Approach Matters
+- **Maximum Precision**: CVD calculated every second, not every minute
+- **Perfect Alignment**: All timeframes derived from same 1s source
+- **Real-Time Detection**: Patterns detected as they happen, not at candle close
+- **No Information Loss**: Most granular data preserved throughout analysis
 
 ## Risk Management
 
