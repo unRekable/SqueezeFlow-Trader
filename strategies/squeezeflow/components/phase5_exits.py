@@ -185,7 +185,8 @@ class ExitManagement:
         position_side = position.get('side', '').upper()
         
         # Calculate recent CVD trends
-        # Adjust lookback for 1s mode\n        lookback = min(10 if not self.enable_1s_mode else 600, len(spot_cvd) // 2)  # 10min in 1s mode
+        # Adjust lookback for 1s mode
+        lookback = min(10 if not self.enable_1s_mode else 600, len(spot_cvd) // 2)  # 10min in 1s mode
         spot_trend = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback]
         futures_trend = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback]
         

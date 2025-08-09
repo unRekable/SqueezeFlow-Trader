@@ -126,7 +126,7 @@ class OptimizedInfluxClient:
                 ORDER BY time ASC
             """,
             
-            # NEW: 1-second data queries
+            # NEW: 1-second data queries - Fixed to use correct retention policy
             'ohlcv_1s_data': """
                 SELECT 
                     first(open) AS open,
@@ -134,7 +134,7 @@ class OptimizedInfluxClient:
                     min(low) AS low,
                     last(close) AS close,
                     sum(vbuy) + sum(vsell) AS volume
-                FROM "trades_1s"
+                FROM "aggr_1s"."trades_1s"
                 WHERE ({market_conditions})
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'
@@ -151,7 +151,7 @@ class OptimizedInfluxClient:
                     sum(csell) AS total_csell,
                     sum(lbuy) AS total_lbuy,
                     sum(lsell) AS total_lsell
-                FROM "trades_1s"
+                FROM "aggr_1s"."trades_1s"
                 WHERE ({market_conditions})
                 AND time >= '{start_time}'
                 AND time <= '{end_time}'
@@ -820,10 +820,10 @@ class OptimizedInfluxClient:
     async def _check_1s_data_availability(self, markets: List[str], start_time: datetime, end_time: datetime) -> Dict:
         """Check if 1-second data is available and recent"""
         try:
-            # Check for recent data in trades_1s measurement
+            # Check for recent data in aggr_1s retention policy
             check_query = """
                 SELECT COUNT(*) as data_points
-                FROM "trades_1s"
+                FROM "aggr_1s"."trades_1s"
                 WHERE time > now() - 5m
                 LIMIT 1
             """
