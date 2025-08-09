@@ -96,6 +96,11 @@ class SqueezeFlowConfig:
     use_fixed_stops: bool = False       # Strategy uses dynamic exits
     use_fixed_targets: bool = False     # Strategy follows flow until invalidation
     
+    # Phase 2.1 Parallel Processing Configuration
+    enable_parallel_processing: bool = field(default_factory=lambda: os.getenv('SQUEEZEFLOW_ENABLE_PARALLEL', 'true').lower() == 'true')
+    max_parallel_workers: int = field(default_factory=lambda: min(4, int(os.getenv('SQUEEZEFLOW_MAX_WORKERS', '4'))))
+    parallel_batch_size: int = field(default_factory=lambda: int(os.getenv('SQUEEZEFLOW_BATCH_SIZE', '10')))
+    
     def get_position_size_factor(self, score: float) -> float:
         """Get position size factor based on score (UPDATED for new thresholds)"""
         if score >= 8:
@@ -197,3 +202,53 @@ class SqueezeFlowConfig:
             return 3.0  # 3x higher thresholds for 1s data
         else:
             return 1.0  # Normal thresholds for minute+ data
+    
+    def get_optimal_worker_count(self, total_windows: int) -> int:
+        """
+        Get optimal worker count based on workload and system capabilities
+        
+        Args:
+            total_windows: Total number of windows to process
+            
+        Returns:
+            Optimal number of workers for parallel processing
+        """
+        if not self.enable_parallel_processing:
+            return 1
+            
+        # For small workloads, use fewer workers
+        if total_windows < 50:
+            return 1
+        elif total_windows < 200:
+            return min(2, self.max_parallel_workers)
+        else:
+            return self.max_parallel_workers
+    
+    def get_batch_size_for_data_mode(self) -> int:
+        """
+        Get optimal batch size based on data mode (1s vs minute+)
+        
+        Returns:
+            Optimal batch size for current data mode
+        """
+        if self.enable_1s_mode:
+            # Smaller batches for 1s data to manage memory
+            return min(self.parallel_batch_size, 5)
+        else:
+            return self.parallel_batch_size
+    
+    def should_enable_parallel_processing(self, total_operations: int) -> bool:
+        """
+        Determine if parallel processing should be enabled based on workload
+        
+        Args:
+            total_operations: Total number of operations to perform
+            
+        Returns:
+            True if parallel processing is beneficial
+        """
+        return (
+            self.enable_parallel_processing and 
+            self.max_parallel_workers > 1 and
+            total_operations > 100  # Only worth it for substantial workloads
+        )

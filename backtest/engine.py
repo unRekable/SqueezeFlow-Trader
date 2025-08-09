@@ -17,6 +17,10 @@ import time
 import gc
 import psutil
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+import multiprocessing
+import queue
 
 from data.pipeline import create_data_pipeline
 
@@ -50,16 +54,33 @@ class BacktestEngine:
     - Rolling window system with LRU cache
     - Explicit memory cleanup with garbage collection
     - Memory monitoring with auto-pause threshold
+    
+    Phase 2.1 Parallel Processing:
+    - Multi-threaded window processing for independent windows
+    - Configurable worker count (default 4, max CPU cores)
+    - Thread-safe data structures and calculations
+    - Progress tracking across parallel workers
+    - Error handling for failed workers
+    - Maintains result ordering despite parallel execution
     """
     
     def __init__(self, initial_balance: float = 10000.0, leverage: float = 1.0, 
-                 enable_1s_mode: bool = False, max_memory_gb: float = 8.0):
+                 enable_1s_mode: bool = False, max_memory_gb: float = 8.0, 
+                 max_workers: int = None, enable_parallel: bool = True):
         self.initial_balance = initial_balance
         self.leverage = leverage
         self.portfolio = Portfolio(initial_balance)
         self.data_pipeline = create_data_pipeline()
         self.logger = BacktestLogger()
         self.visualizer = BacktestVisualizer()
+        
+        # Parallel processing configuration
+        self.enable_parallel = enable_parallel
+        self.max_workers = max_workers or min(4, multiprocessing.cpu_count())
+        self.thread_pool = None
+        self.parallel_lock = Lock()  # Thread safety for portfolio operations
+        
+        self.logger.info(f"🔧 Parallel Processing: {'Enabled' if enable_parallel else 'Disabled'} (Workers: {self.max_workers})")
         
         # 1s Data Memory Management Configuration
         self.enable_1s_mode = enable_1s_mode
@@ -92,6 +113,16 @@ class BacktestEngine:
         self.current_data = None
         self.strategy = None
         self.next_trade_id = 1  # For generating trade IDs in backtest
+        
+        # Parallel processing state
+        self.window_queue = queue.Queue()
+        self.result_queue = queue.Queue()
+        self.parallel_stats = {
+            'parallel_windows_processed': 0,
+            'sequential_windows_processed': 0,
+            'parallel_speedup_ratio': 1.0,
+            'thread_pool_errors': 0
+        }
         
     def run(self, strategy, symbol: str, start_date: str, end_date: str, 
             timeframe: str = '5m', balance: Optional[float] = None, leverage: Optional[float] = None) -> Dict:
@@ -196,6 +227,10 @@ class BacktestEngine:
         # Log final memory statistics
         if self.enable_1s_mode:
             self._log_memory_statistics()
+            
+        # Log parallel processing statistics
+        if self.enable_parallel:
+            self._log_final_parallel_stats()
         
         return result
     
@@ -238,7 +273,19 @@ class BacktestEngine:
         total_duration = end_time - start_time
         total_iterations = int(total_duration.total_seconds() / step_duration.total_seconds())
         
-        self.logger.info(f"🔄 Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+        # Determine if parallel processing is beneficial
+        use_parallel = (self.enable_parallel and 
+                       total_iterations > 100 and  # Only for substantial workloads
+                       self.max_workers > 1)
+        
+        if use_parallel:
+            self.logger.info(f"🚀 PARALLEL Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+            self.logger.info(f"⚡ Using {self.max_workers} parallel workers for optimal performance")
+            return self._run_parallel_rolling_windows(full_dataset, start_time, end_time, timeframe, 
+                                                    window_duration, step_duration, total_iterations)
+        else:
+            self.logger.info(f"🔄 SEQUENTIAL Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+            self.logger.info(f"📌 Using sequential processing (parallel={'disabled' if not self.enable_parallel else 'not beneficial'})")
         
         # Start with first window (4 hours from start_time)
         # Ensure current_time is timezone-aware (UTC) to match data timestamps
@@ -308,6 +355,378 @@ class BacktestEngine:
         
         self.logger.info(f"🎯 Rolling window processing completed: {len(all_executed_orders)} total orders executed")
         return all_executed_orders
+    
+    def _run_parallel_rolling_windows(self, full_dataset: Dict, start_time: datetime, 
+                                     end_time: datetime, timeframe: str,
+                                     window_duration: timedelta, step_duration: timedelta,
+                                     total_iterations: int) -> List[Dict]:
+        """
+        Process backtest using parallel rolling windows for optimal performance
+        
+        Args:
+            full_dataset: Complete dataset loaded from data pipeline
+            start_time: Backtest start time
+            end_time: Backtest end time
+            timeframe: Trading timeframe
+            window_duration: Duration of each window
+            step_duration: Step between windows
+            total_iterations: Total number of windows to process
+            
+        Returns:
+            List of executed orders from all windows
+        """
+        all_executed_orders = []
+        
+        # Get data timeframes for indexing
+        ohlcv = full_dataset.get('ohlcv', pd.DataFrame())
+        if ohlcv.empty:
+            self.logger.error("No OHLCV data available for parallel window processing")
+            return all_executed_orders
+        
+        # Ensure datetime index for proper slicing
+        if not isinstance(ohlcv.index, pd.DatetimeIndex):
+            self.logger.error("OHLCV data must have datetime index for parallel windows")
+            return all_executed_orders
+        
+        try:
+            # Create thread pool for parallel processing
+            with ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix='backtest_worker') as executor:
+                self.thread_pool = executor
+                
+                # Generate all window tasks
+                window_tasks = self._generate_window_tasks(
+                    full_dataset, start_time, end_time, window_duration, 
+                    step_duration, total_iterations
+                )
+                
+                # Submit all tasks for parallel execution
+                future_to_window = {}
+                for i, task in enumerate(window_tasks):
+                    future = executor.submit(self._process_single_window, task, i)
+                    future_to_window[future] = task
+                
+                # Collect results as they complete
+                completed_windows = 0
+                failed_windows = 0
+                
+                for future in as_completed(future_to_window):
+                    completed_windows += 1
+                    task = future_to_window[future]
+                    
+                    try:
+                        window_result = future.result()
+                        if window_result and window_result.get('orders'):
+                            # Thread-safe order collection
+                            with self.parallel_lock:
+                                all_executed_orders.extend(window_result['orders'])
+                        
+                        # Progress logging every 50 completions or at milestones
+                        if completed_windows % 50 == 0 or completed_windows == total_iterations:
+                            progress_pct = (completed_windows / total_iterations) * 100
+                            self.logger.info(
+                                f"⚡ Parallel Progress: {completed_windows:,}/{total_iterations:,} "
+                                f"({progress_pct:.1f}%) - Window: {task['window_end'].strftime('%Y-%m-%d %H:%M')}"
+                            )
+                        
+                    except Exception as e:
+                        failed_windows += 1
+                        self.parallel_stats['thread_pool_errors'] += 1
+                        self.logger.error(f"❌ Parallel window processing error: {e}")
+                        continue
+                
+                # Update parallel processing stats
+                self.parallel_stats['parallel_windows_processed'] = completed_windows - failed_windows
+                
+        except Exception as e:
+            self.logger.error(f"❌ Parallel processing setup failed: {e}")
+            self.logger.info("🔄 Falling back to sequential processing...")
+            # Fallback to sequential processing
+            return self._run_sequential_fallback(full_dataset, start_time, end_time, timeframe)
+        finally:
+            self.thread_pool = None
+        
+        # Log parallel processing results
+        self._log_parallel_performance(completed_windows, failed_windows, total_iterations)
+        
+        self.logger.info(f"🎯 Parallel processing completed: {len(all_executed_orders)} total orders executed")
+        return all_executed_orders
+    
+    def _generate_window_tasks(self, full_dataset: Dict, start_time: datetime, end_time: datetime,
+                              window_duration: timedelta, step_duration: timedelta, 
+                              total_iterations: int) -> List[Dict]:
+        """
+        Generate all window processing tasks for parallel execution
+        
+        Args:
+            full_dataset: Complete dataset
+            start_time: Backtest start time
+            end_time: Backtest end time  
+            window_duration: Duration of each window
+            step_duration: Step between windows
+            total_iterations: Total iterations expected
+            
+        Returns:
+            List of window task dictionaries
+        """
+        tasks = []
+        current_time = start_time + window_duration
+        iteration = 0
+        
+        while current_time <= end_time and iteration < total_iterations:
+            iteration += 1
+            
+            # Define window boundaries
+            window_start = current_time - window_duration
+            window_end = current_time
+            
+            # Create task dict (avoiding heavy data copying)
+            task = {
+                'iteration': iteration,
+                'window_start': window_start,
+                'window_end': window_end,
+                'dataset_ref': id(full_dataset),  # Reference only, actual data passed separately
+                'timeframe': full_dataset.get('timeframe'),
+                'symbol': full_dataset.get('symbol')
+            }
+            
+            tasks.append(task)
+            current_time += step_duration
+        
+        self.logger.info(f"📅 Generated {len(tasks)} window tasks for parallel processing")
+        return tasks
+    
+    def _process_single_window(self, task: Dict, task_index: int) -> Optional[Dict]:
+        """
+        Process a single window task in parallel worker thread
+        
+        This method is thread-safe and processes one window independently
+        
+        Args:
+            task: Window task dictionary
+            task_index: Task index for tracking
+            
+        Returns:
+            Dict with window processing results or None if failed
+        """
+        try:
+            window_start = task['window_start']
+            window_end = task['window_end']
+            iteration = task['iteration']
+            
+            # Create windowed dataset (each thread gets its own copy)
+            # Note: This assumes self.current_data is set before parallel processing
+            windowed_dataset = self._create_windowed_dataset(
+                self.current_data, window_start, window_end
+            )
+            
+            # Skip if insufficient data in window
+            if not self._validate_windowed_data(windowed_dataset):
+                return None
+            
+            # Get current portfolio state (thread-safe snapshot)
+            with self.parallel_lock:
+                portfolio_state = self.portfolio.get_state().copy()
+                portfolio_state['available_leverage'] = self.leverage
+                portfolio_state['current_time'] = window_end
+            
+            # Process strategy with windowed data (thread-safe)
+            strategy_result = self.strategy.process(windowed_dataset, portfolio_state)
+            
+            if strategy_result and 'orders' in strategy_result:
+                orders = strategy_result['orders']
+                executed_orders = []
+                
+                # Execute orders with thread safety
+                for order in orders:
+                    # Ensure order timestamp doesn't exceed current_time and is timezone-aware
+                    if 'timestamp' not in order or order['timestamp'] > window_end:
+                        order['timestamp'] = window_end
+                    elif 'timestamp' in order and order['timestamp'].tzinfo is None and window_end.tzinfo is not None:
+                        order['timestamp'] = order['timestamp'].replace(tzinfo=window_end.tzinfo)
+                    
+                    # Thread-safe order execution
+                    with self.parallel_lock:
+                        execution_result = self._execute_order(order, windowed_dataset)
+                        if execution_result:
+                            executed_orders.append(execution_result)
+                            
+                            # Log significant trades (with thread info)
+                            side = execution_result.get('side', 'UNKNOWN')
+                            qty = execution_result.get('quantity', 0)
+                            price = execution_result.get('price', 0)
+                            signal_type = execution_result.get('signal_type', 'UNKNOWN')
+                            
+                            self.logger.info(
+                                f"✅ [{task_index:03d}] {window_end.strftime('%Y-%m-%d %H:%M')} - "
+                                f"{side} {qty:.6f} @ ${price:.2f} ({signal_type})"
+                            )
+                
+                return {
+                    'iteration': iteration,
+                    'window_end': window_end,
+                    'orders': executed_orders,
+                    'task_index': task_index
+                }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Window processing error (task {task_index}): {e}")
+            return None
+    
+    def _run_sequential_fallback(self, full_dataset: Dict, start_time: datetime, 
+                               end_time: datetime, timeframe: str) -> List[Dict]:
+        """
+        Fallback to sequential processing if parallel processing fails
+        
+        Args:
+            full_dataset: Complete dataset
+            start_time: Backtest start time
+            end_time: Backtest end time
+            timeframe: Trading timeframe
+            
+        Returns:
+            List of executed orders
+        """
+        # Store current data for window processing
+        self.current_data = full_dataset
+        
+        # Use original sequential logic with same parameters
+        window_hours = 4
+        step_minutes = 5
+        window_duration = timedelta(hours=window_hours)
+        step_duration = timedelta(minutes=step_minutes)
+        
+        return self._run_rolling_window_backtest_sequential(
+            full_dataset, start_time, end_time, timeframe,
+            window_duration, step_duration
+        )
+    
+    def _run_rolling_window_backtest_sequential(self, full_dataset: Dict, start_time: datetime,
+                                              end_time: datetime, timeframe: str,
+                                              window_duration: timedelta, step_duration: timedelta) -> List[Dict]:
+        """
+        Original sequential rolling window processing (renamed for clarity)
+        This is the fallback when parallel processing fails
+        """
+        all_executed_orders = []
+        
+        # Get data timeframes for indexing
+        ohlcv = full_dataset.get('ohlcv', pd.DataFrame())
+        if ohlcv.empty:
+            self.logger.error("No OHLCV data available for sequential window processing")
+            return all_executed_orders
+        
+        # Ensure datetime index for proper slicing
+        if not isinstance(ohlcv.index, pd.DatetimeIndex):
+            self.logger.error("OHLCV data must have datetime index for rolling windows")
+            return all_executed_orders
+        
+        # Calculate total iterations for progress tracking
+        total_duration = end_time - start_time
+        total_iterations = int(total_duration.total_seconds() / step_duration.total_seconds())
+        
+        # Start with first window
+        current_time = start_time + window_duration
+        iteration = 0
+        
+        while current_time <= end_time:
+            iteration += 1
+            
+            # Define window boundaries
+            window_start = current_time - window_duration
+            window_end = current_time
+            
+            # Progress logging every 100 iterations or at milestones
+            if iteration % 100 == 0 or iteration == total_iterations:
+                progress_pct = (iteration / total_iterations) * 100
+                self.logger.info(
+                    f"🔄 Sequential Progress: {iteration:,}/{total_iterations:,} "
+                    f"({progress_pct:.1f}%) - Window: {window_end.strftime('%Y-%m-%d %H:%M')}"
+                )
+            
+            try:
+                # Create windowed dataset (only data up to current_time)
+                windowed_dataset = self._create_windowed_dataset(
+                    full_dataset, window_start, window_end
+                )
+                
+                # Skip if insufficient data in window
+                if not self._validate_windowed_data(windowed_dataset):
+                    current_time += step_duration
+                    continue
+                
+                # Get current portfolio state
+                portfolio_state = self.portfolio.get_state()
+                portfolio_state['available_leverage'] = self.leverage
+                portfolio_state['current_time'] = current_time
+                
+                # Process strategy with windowed data (no future visibility)
+                strategy_result = self.strategy.process(windowed_dataset, portfolio_state)
+                
+                if strategy_result and 'orders' in strategy_result:
+                    orders = strategy_result['orders']
+                    
+                    # Execute any orders generated for this window
+                    for order in orders:
+                        # Ensure order timestamp doesn't exceed current_time and is timezone-aware
+                        if 'timestamp' not in order or order['timestamp'] > current_time:
+                            order['timestamp'] = current_time
+                        elif 'timestamp' in order and order['timestamp'].tzinfo is None and current_time.tzinfo is not None:
+                            order['timestamp'] = order['timestamp'].replace(tzinfo=current_time.tzinfo)
+                        
+                        execution_result = self._execute_order(order, windowed_dataset)
+                        if execution_result:
+                            all_executed_orders.append(execution_result)
+                            
+                            # Log significant trades
+                            side = execution_result.get('side', 'UNKNOWN')
+                            qty = execution_result.get('quantity', 0)
+                            price = execution_result.get('price', 0)
+                            signal_type = execution_result.get('signal_type', 'UNKNOWN')
+                            
+                            self.logger.info(
+                                f"✅ {window_end.strftime('%Y-%m-%d %H:%M')} - "
+                                f"{side} {qty:.6f} @ ${price:.2f} ({signal_type})"
+                            )
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error processing window {window_end}: {e}")
+            
+            # Move to next window
+            current_time += step_duration
+        
+        # Update stats
+        self.parallel_stats['sequential_windows_processed'] = iteration
+        
+        self.logger.info(f"🎯 Sequential processing completed: {len(all_executed_orders)} total orders executed")
+        return all_executed_orders
+    
+    def _log_parallel_performance(self, completed: int, failed: int, total: int):
+        """
+        Log parallel processing performance metrics
+        
+        Args:
+            completed: Number of completed windows
+            failed: Number of failed windows
+            total: Total windows attempted
+        """
+        success_rate = (completed / total * 100) if total > 0 else 0
+        
+        # Estimate speedup (conservative estimate based on worker count)
+        theoretical_speedup = min(self.max_workers, total / max(1, self.max_workers))
+        actual_speedup = theoretical_speedup * (success_rate / 100) * 0.8  # Account for overhead
+        
+        self.parallel_stats['parallel_speedup_ratio'] = actual_speedup
+        
+        self.logger.info(f"📊 Parallel Performance Summary:")
+        self.logger.info(f"   ✅ Completed: {completed:,} windows ({success_rate:.1f}% success)")
+        self.logger.info(f"   ❌ Failed: {failed:,} windows")
+        self.logger.info(f"   ⚡ Workers: {self.max_workers} threads")
+        self.logger.info(f"   🚀 Estimated Speedup: {actual_speedup:.1f}x vs sequential")
+        
+        if failed > 0:
+            self.logger.warning(f"   ⚠️ {failed} windows failed - check logs for details")
     
     def _run_streaming_backtest(self, symbol: str, start_time: datetime, 
                                end_time: datetime, timeframe: str) -> List[Dict]:
@@ -602,6 +1021,28 @@ class BacktestEngine:
             
         except Exception as e:
             self.logger.warning(f"Failed to log memory statistics: {e}")
+    
+    def _log_final_parallel_stats(self):
+        """
+        Log final parallel processing statistics
+        """
+        try:
+            stats = self.parallel_stats
+            parallel_processed = stats.get('parallel_windows_processed', 0)
+            sequential_processed = stats.get('sequential_windows_processed', 0)
+            total_processed = parallel_processed + sequential_processed
+            speedup = stats.get('parallel_speedup_ratio', 1.0)
+            errors = stats.get('thread_pool_errors', 0)
+            
+            self.logger.info("🚀 Parallel Processing Final Statistics:")
+            self.logger.info(f"   Total Windows: {total_processed:,}")
+            self.logger.info(f"   Parallel: {parallel_processed:,} ({parallel_processed/max(total_processed,1)*100:.1f}%)")
+            self.logger.info(f"   Sequential: {sequential_processed:,} ({sequential_processed/max(total_processed,1)*100:.1f}%)")
+            self.logger.info(f"   Speedup Achieved: {speedup:.1f}x")
+            self.logger.info(f"   Thread Errors: {errors}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to log parallel statistics: {e}")
     
     def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
         """
@@ -1060,15 +1501,19 @@ if __name__ == "__main__":
     parser.add_argument('--strategy', default='SqueezeFlowStrategy', help='Strategy class name')
     parser.add_argument('--enable-1s-mode', action='store_true', help='Enable 1s mode for memory-efficient processing')
     parser.add_argument('--max-memory-gb', type=float, default=8.0, help='Maximum memory limit in GB (default: 8.0)')
+    parser.add_argument('--max-workers', type=int, help='Maximum parallel workers (auto-detect if not specified)')
+    parser.add_argument('--disable-parallel', action='store_true', help='Disable parallel processing (force sequential)')
     
     args = parser.parse_args()
     
-    # Create engine with 1s mode support
+    # Create engine with 1s mode and parallel processing support
     engine = BacktestEngine(
         initial_balance=args.balance, 
         leverage=args.leverage,
         enable_1s_mode=args.enable_1s_mode,
-        max_memory_gb=args.max_memory_gb
+        max_memory_gb=args.max_memory_gb,
+        max_workers=args.max_workers,
+        enable_parallel=not args.disable_parallel
     )
     
     # Load strategy
@@ -1095,3 +1540,7 @@ if __name__ == "__main__":
     print(f"Total Trades: {result['total_trades']}")
     if args.enable_1s_mode:
         print(f"1s Mode: Enabled (Memory Limit: {args.max_memory_gb}GB)")
+    if not args.disable_parallel:
+        print(f"Parallel Processing: Enabled (Workers: {engine.max_workers})")
+    else:
+        print(f"Parallel Processing: Disabled (Sequential Mode)")

@@ -18,6 +18,8 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import pytz
 import logging
+from threading import Lock
+import copy
 
 from strategies.base import BaseStrategy
 from strategies.squeezeflow.config import SqueezeFlowConfig
@@ -70,6 +72,12 @@ class SqueezeFlowStrategy(BaseStrategy):
         
         # Track strategy state
         self.last_analysis = None
+        
+        # Thread safety for parallel processing
+        import threading
+        self._thread_local = threading.local()
+        self._strategy_lock = Lock()
+        
         # Track positions we've already signaled exits for (to prevent duplicates)
         self.exit_signals_sent = set()
         
@@ -422,5 +430,58 @@ class SqueezeFlowStrategy(BaseStrategy):
             return exit_order
             
         except Exception as e:
-            self.logger.error(f"Error generating exit order: {str(e)}")
+            thread_id = getattr(self._thread_local, 'thread_id', 'unknown')
+            self.logger.error(f"Error generating exit order in thread {thread_id}: {str(e)}")
             return None
+    
+    def _create_thread_safe_dataset_copy(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a thread-safe deep copy of dataset for independent processing
+        
+        Args:
+            dataset: Original dataset dictionary
+            
+        Returns:
+            Deep copy of dataset safe for concurrent access
+        """
+        try:
+            import pandas as pd
+            
+            # Create a new dataset dict with copied data structures
+            dataset_copy = {}
+            
+            # Copy simple values
+            for key in ['symbol', 'timeframe', 'start_time', 'end_time', 'data_source']:
+                if key in dataset:
+                    dataset_copy[key] = dataset[key]
+            
+            # Deep copy DataFrames and Series for thread safety
+            for key in ['ohlcv', 'spot_volume', 'futures_volume']:
+                if key in dataset and isinstance(dataset[key], pd.DataFrame):
+                    dataset_copy[key] = dataset[key].copy()
+                else:
+                    dataset_copy[key] = pd.DataFrame()
+            
+            for key in ['spot_cvd', 'futures_cvd', 'cvd_divergence']:
+                if key in dataset and isinstance(dataset[key], pd.Series):
+                    dataset_copy[key] = dataset[key].copy()
+                else:
+                    dataset_copy[key] = pd.Series(dtype=float)
+            
+            # Copy metadata and markets
+            if 'metadata' in dataset:
+                dataset_copy['metadata'] = copy.deepcopy(dataset['metadata'])
+            else:
+                dataset_copy['metadata'] = {}
+                
+            if 'markets' in dataset:
+                dataset_copy['markets'] = copy.deepcopy(dataset['markets'])
+            else:
+                dataset_copy['markets'] = {'spot': [], 'perp': []}
+            
+            return dataset_copy
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create thread-safe dataset copy: {e}")
+            # Return original dataset as fallback (not thread-safe but functional)
+            return dataset
