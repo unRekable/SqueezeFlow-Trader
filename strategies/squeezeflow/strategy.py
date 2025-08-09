@@ -168,8 +168,16 @@ class SqueezeFlowStrategy(BaseStrategy):
                     
                 results['phase_results']['phase1_context'] = context_result
                 
+                # Handle warmup period or errors
                 if context_result.get('error'):
-                    self.logger.warning(f"Phase 1 error: {context_result['error']}")
+                    # Only log actual errors, not warmup periods
+                    if 'Insufficient data' not in context_result['error']:
+                        self.logger.warning(f"Phase 1 error: {context_result['error']}")
+                    return results
+                    
+                # If in warmup, return early without error
+                if context_result.get('warmup_progress'):
+                    # Silently continue during warmup
                     return results
                     
                 # Phase 2: Divergence Detection (Setup Identification)
