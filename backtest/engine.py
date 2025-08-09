@@ -304,12 +304,19 @@ class BacktestEngine:
         Returns:
             List of executed orders from all windows
         """
-        # Rolling window parameters (matching live trading)
-        window_hours = 4  # 4-hour rolling windows
-        step_minutes = 5  # Step forward 5 minutes each iteration
+        # Rolling window parameters (adaptive for 1s mode)
+        if self.enable_1s_mode or timeframe == '1s':
+            window_hours = 1  # 1-hour window for 1s mode (3600 data points)
+            step_seconds = 1  # Step forward 1 SECOND for true granularity
+            step_duration = timedelta(seconds=step_seconds)
+            self.logger.info(f"📊 1s mode: Using {window_hours}h windows with {step_seconds}s steps")
+        else:
+            window_hours = 4  # 4-hour rolling windows
+            step_minutes = 5  # Step forward 5 minutes each iteration
+            step_duration = timedelta(minutes=step_minutes)
+            self.logger.info(f"📊 Regular mode: Using {window_hours}h windows with {step_minutes}m steps")
         
         window_duration = timedelta(hours=window_hours)
-        step_duration = timedelta(minutes=step_minutes)
         
         all_executed_orders = []
         
@@ -334,12 +341,18 @@ class BacktestEngine:
                        self.max_workers > 1)
         
         if use_parallel:
-            self.logger.info(f"🚀 PARALLEL Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+            if self.enable_1s_mode or timeframe == '1s':
+                self.logger.info(f"🚀 PARALLEL Processing {total_iterations:,} rolling windows ({window_hours}h windows, 1s steps)")
+            else:
+                self.logger.info(f"🚀 PARALLEL Processing {total_iterations:,} rolling windows ({window_hours}h windows, 5m steps)")
             self.logger.info(f"⚡ Using {self.max_workers} parallel workers for optimal performance")
             return self._run_parallel_rolling_windows(full_dataset, start_time, end_time, timeframe, 
                                                     window_duration, step_duration, total_iterations)
         else:
-            self.logger.info(f"🔄 SEQUENTIAL Processing {total_iterations:,} rolling windows ({window_hours}h windows, {step_minutes}m steps)")
+            if self.enable_1s_mode or timeframe == '1s':
+                self.logger.info(f"🔄 SEQUENTIAL Processing {total_iterations:,} rolling windows ({window_hours}h windows, 1s steps)")
+            else:
+                self.logger.info(f"🔄 SEQUENTIAL Processing {total_iterations:,} rolling windows ({window_hours}h windows, 5m steps)")
             self.logger.info(f"📌 Using sequential processing (parallel={'disabled' if not self.enable_parallel else 'not beneficial'})")
         
         # Start with first window (4 hours from start_time)
@@ -654,11 +667,17 @@ class BacktestEngine:
         # Store current data for window processing
         self.current_data = full_dataset
         
-        # Use original sequential logic with same parameters
-        window_hours = 4
-        step_minutes = 5
+        # Use original sequential logic with adaptive parameters
+        if self.enable_1s_mode or timeframe == '1s':
+            window_hours = 1  # 1-hour window for 1s mode
+            step_seconds = 1  # 1-second steps
+            step_duration = timedelta(seconds=step_seconds)
+        else:
+            window_hours = 4
+            step_minutes = 5
+            step_duration = timedelta(minutes=step_minutes)
+        
         window_duration = timedelta(hours=window_hours)
-        step_duration = timedelta(minutes=step_minutes)
         
         return self._run_rolling_window_backtest_sequential(
             full_dataset, start_time, end_time, timeframe,
@@ -809,13 +828,16 @@ class BacktestEngine:
         # Rolling window parameters optimized for 1s data
         if timeframe == '1s':
             window_hours = 1  # Smaller windows for 1s data (3600 data points)
-            step_minutes = 1  # Step forward 1 minute for dense data
+            step_seconds = 1  # Step forward 1 SECOND for true 1s granularity
+            step_duration = timedelta(seconds=step_seconds)
+            self.logger.info(f"📊 1s mode: Using {window_hours}h windows with {step_seconds}s steps")
         else:
             window_hours = 2  # 2-hour windows for other timeframes
             step_minutes = 5  # Step forward 5 minutes
+            step_duration = timedelta(minutes=step_minutes)
+            self.logger.info(f"📊 Regular mode: Using {window_hours}h windows with {step_minutes}m steps")
         
         window_duration = timedelta(hours=window_hours)
-        step_duration = timedelta(minutes=step_minutes)
         
         all_executed_orders = []
         
@@ -823,7 +845,10 @@ class BacktestEngine:
         total_duration = end_time - start_time
         total_iterations = int(total_duration.total_seconds() / step_duration.total_seconds())
         
-        self.logger.info(f"🔄 Streaming processing: {total_iterations:,} windows ({window_hours}h windows, {step_minutes}m steps)")
+        if timeframe == '1s':
+            self.logger.info(f"🔄 Streaming processing: {total_iterations:,} windows ({window_hours}h windows, 1s steps)")
+        else:
+            self.logger.info(f"🔄 Streaming processing: {total_iterations:,} windows ({window_hours}h windows, 5m steps)")
         self.logger.info(f"🎯 Target chunk size: {self.chunk_hours}h for optimal memory usage")
         
         # Start processing

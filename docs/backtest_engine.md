@@ -6,7 +6,18 @@ The SqueezeFlow Trader backtest engine is a sophisticated orchestration system t
 
 ### Key Innovation: Rolling Window Processing
 
-The backtest engine now processes historical data in **4-hour rolling windows** that step forward **5 minutes** at a time, ensuring:
+The backtest engine processes historical data using **rolling windows** with adaptive step sizes:
+
+**1-Second Mode** (when using 1s timeframe data):
+- **1-hour rolling windows** stepping forward **1 second** at a time
+- **Full granularity testing**: Every second of data is evaluated
+- **60x more decision points**: Matches real-time 1s execution
+
+**Regular Mode** (5m+ timeframes):
+- **4-hour rolling windows** stepping forward **5 minutes** at a time
+- **Efficient processing**: Balanced between accuracy and speed
+
+Both modes ensure:
 - **No lookahead bias**: Strategy only sees data available up to the current time
 - **Realistic reset detection**: Phase 3 reset patterns develop naturally over time
 - **Live trading parity**: Processing matches production environment exactly
@@ -70,7 +81,9 @@ engine = BacktestEngine(initial_balance=10000, leverage=1.0)
 # - CVDBaselineManager for position tracking
 # - Portfolio with enhanced position fields
 # - Multi-channel logging system
-# - Rolling window processor (4-hour windows, 5-minute steps)
+# - Rolling window processor:
+#   - 1s mode: 1-hour windows, 1-second steps
+#   - Regular: 4-hour windows, 5-minute steps
 ```
 
 ### 2. Data Loading Phase
@@ -93,9 +106,13 @@ dataset = data_pipeline.get_complete_dataset(
 
 ### 2a. Rolling Window Processing
 ```python
-# Rolling window implementation
-window_size = timedelta(hours=4)        # 4-hour analysis window
-step_size = timedelta(minutes=5)        # 5-minute forward steps
+# Rolling window implementation (adaptive)
+if timeframe == '1s':
+    window_size = timedelta(hours=1)    # 1-hour window for 1s mode
+    step_size = timedelta(seconds=1)    # 1-second steps (full granularity)
+else:
+    window_size = timedelta(hours=4)    # 4-hour analysis window
+    step_size = timedelta(minutes=5)    # 5-minute forward steps
 
 current_time = start_time + window_size
 while current_time <= end_time:
@@ -295,6 +312,13 @@ strategy.process(windowed_data)  # Limited to current_time and before
 ### Performance Characteristics
 ```yaml
 Processing Volume:
+
+**1-Second Mode**:
+  - 1-day backtest: ~86,400 rolling windows (24h × 3600s)
+  - 1-hour backtest: ~3,600 rolling windows
+  - Progress logging: Every 1000 iterations
+
+**Regular Mode**:
   - 1-day backtest: ~288 rolling windows (24h × 60min ÷ 5min)
   - 1-week backtest: ~2016 rolling windows
   - Progress logging: Every 100 iterations
@@ -453,7 +477,8 @@ The rolling window backtest engine now provides **exact parity** with live tradi
 | Execution | Simulated with fees | FreqTrade API |
 | Latency | None (instant) | Network latency (~100ms) |
 | Slippage | Configurable simulation | Market reality |
-| Processing | **4-hour windows, 5-min steps** | **4-hour windows, 5-min steps** |
+| Processing (1s) | **1-hour windows, 1-sec steps** | **1-sec execution cycles** |
+| Processing (5m+) | **4-hour windows, 5-min steps** | **5-min execution cycles** |
 
 ### Backtest-Live Parity Achieved
 **Before Rolling Windows**: Significant differences in data processing led to strategy behavior differences between backtest and live trading.
