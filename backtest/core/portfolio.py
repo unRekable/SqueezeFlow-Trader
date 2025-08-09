@@ -344,38 +344,66 @@ class Portfolio:
     def close_position_by_trade_id(self, trade_id: int, price: float, timestamp: datetime) -> Optional[Dict]:
         """Close position by trade_id"""
         position_key = None
+        position_to_close = None
         for key, position in self.positions.items():
             if position.trade_id == trade_id:
                 position_key = key
+                position_to_close = position
                 break
         
-        if position_key and self.close_position(position_key, price, timestamp):
-            return {
-                'status': 'closed',
-                'position_key': position_key,
-                'trade_id': trade_id,
-                'exit_price': price,
-                'timestamp': timestamp
-            }
+        if position_key and position_to_close:
+            # Calculate PnL before closing
+            if position_to_close.side == 'LONG':
+                pnl = (price - position_to_close.entry_price) * position_to_close.quantity
+            else:  # SHORT
+                pnl = (position_to_close.entry_price - price) * position_to_close.quantity
+            
+            # Account for fees
+            closing_fees = position_to_close.quantity * price * self.trading_fee
+            net_pnl = pnl - closing_fees - position_to_close.fees_paid
+            
+            if self.close_position(position_key, price, timestamp):
+                return {
+                    'status': 'closed',
+                    'position_key': position_key,
+                    'trade_id': trade_id,
+                    'exit_price': price,
+                    'timestamp': timestamp,
+                    'realized_pnl': net_pnl  # Include PnL in result
+                }
         
         return None
     
     def close_position_by_signal_id(self, signal_id: str, price: float, timestamp: datetime) -> Optional[Dict]:
         """Close position by signal_id"""
         position_key = None
+        position_to_close = None
         for key, position in self.positions.items():
             if position.signal_id == signal_id:
                 position_key = key
+                position_to_close = position
                 break
         
-        if position_key and self.close_position(position_key, price, timestamp):
-            return {
-                'status': 'closed',
-                'position_key': position_key,
-                'signal_id': signal_id,
-                'exit_price': price,
-                'timestamp': timestamp
-            }
+        if position_key and position_to_close:
+            # Calculate PnL before closing
+            if position_to_close.side == 'LONG':
+                pnl = (price - position_to_close.entry_price) * position_to_close.quantity
+            else:  # SHORT
+                pnl = (position_to_close.entry_price - price) * position_to_close.quantity
+            
+            # Account for fees
+            closing_fees = position_to_close.quantity * price * self.trading_fee
+            net_pnl = pnl - closing_fees - position_to_close.fees_paid
+            
+            if self.close_position(position_key, price, timestamp):
+                return {
+                    'status': 'closed',
+                    'position_key': position_key,
+                    'signal_id': signal_id,
+                    'exit_price': price,
+                    'timestamp': timestamp,
+                    'realized_pnl': net_pnl  # Include PnL in result
+                }
         
         return None
     
@@ -394,6 +422,17 @@ class Portfolio:
         # Sort by entry time (most recent first)
         matching_positions.sort(key=lambda x: x[1].entry_time, reverse=True)
         position_key = matching_positions[0][0]
+        position_to_close = matching_positions[0][1]
+        
+        # Calculate PnL before closing
+        if position_to_close.side == 'LONG':
+            pnl = (price - position_to_close.entry_price) * position_to_close.quantity
+        else:  # SHORT
+            pnl = (position_to_close.entry_price - price) * position_to_close.quantity
+        
+        # Account for fees
+        closing_fees = position_to_close.quantity * price * self.trading_fee
+        net_pnl = pnl - closing_fees - position_to_close.fees_paid
         
         if self.close_position(position_key, price, timestamp):
             return {
@@ -402,7 +441,8 @@ class Portfolio:
                 'symbol': symbol,
                 'side': side,
                 'exit_price': price,
-                'timestamp': timestamp
+                'timestamp': timestamp,
+                'realized_pnl': net_pnl  # Include PnL in result
             }
         
         return None

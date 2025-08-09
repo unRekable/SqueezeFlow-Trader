@@ -1652,6 +1652,8 @@ class BacktestEngine:
             
             if close_result:
                 self.logger.info(f"✅ Position closed successfully: {close_result}")
+                # Extract PnL from close_result for win/loss tracking
+                pnl = close_result.get('realized_pnl', 0)
                 return {
                     'symbol': symbol,
                     'side': f"EXIT_{side}",
@@ -1660,6 +1662,7 @@ class BacktestEngine:
                     'timestamp': timestamp,
                     'signal_type': 'EXIT',
                     'close_result': close_result,
+                    'pnl': pnl,  # Add PnL for win/loss tracking
                     'fees': order.get('fees', 0),
                     'slippage': order.get('slippage', 0)
                 }
