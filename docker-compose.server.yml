@@ -103,7 +103,7 @@ services:
       # Enhanced OI Tracker Configuration
       - OI_MEASUREMENT=open_interest
       - OI_COLLECTION_INTERVAL=60         # Master cycle: 60 seconds
-      - OI_MIN_DATA_POINTS=1000          # Require 1000+ data points for symbol inclusion
+      - OI_MIN_DATA_POINTS=500           # Require 500+ data points for symbol inclusion
       - OI_LOOKBACK_HOURS=24             # Look back 24 hours for active symbols
       # Exchange-specific intervals (handled internally)
       - BINANCE_OI_INTERVAL=900          # 15 minutes (native frequency)

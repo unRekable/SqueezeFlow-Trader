@@ -49,42 +49,124 @@ class SymbolDiscovery:
         
     def extract_symbol_from_market(self, market: str) -> str:
         """
-        Extract base symbol from market identifier with precise pattern matching
+        Extract base symbol from market identifier using dynamic pattern matching
         
         Examples:
             BINANCE:btcusdt -> BTC
             BINANCE_FUTURES:ethusdt -> ETH  
             COINBASE:BTC-USD -> BTC
             BITFINEX:BTCUSD -> BTC
+            OKEX:ARB-USDT-SWAP -> ARB
+            KUCOIN:ARBUSDTM -> ARB
         """
-        # Remove exchange prefix
-        market_clean = market.split(':')[-1].upper()
+        # Remove exchange prefix - handle special formats
+        if ':' in market:
+            parts = market.split(':', 1)  # Split only on first colon
+            if len(parts) > 1:
+                market_part = parts[1]
+                market_clean = market_part.upper()
+            else:
+                market_part = market
+                market_clean = market.upper()
+        else:
+            market_part = market
+            market_clean = market.upper()
         
-        # Define known base symbols with exact patterns
-        known_symbols = {
-            'BTC': [r'^BTC', r'^XBTU?S?D?T?$'],  # BTC, XBTUSDT, XBTUSD, etc.
-            'ETH': [r'^ETH'],
-            'SOL': [r'^SOL'],  
-            'ADA': [r'^ADA'],
-            'MATIC': [r'^MATIC'],
-            'AVAX': [r'^AVAX'],
-            'LINK': [r'^LINK'],
-            'UNI': [r'^UNI$'],  # Exact match to avoid false positives
-            'DOT': [r'^DOT'],
-            'ATOM': [r'^ATOM'],
-            'LTC': [r'^LTC'],
-            'XRP': [r'^XRP'],
-            'BNB': [r'^BNB']
-        }
+        # Define known quote currencies to strip
+        quote_currencies = ['USDT', 'USDC', 'FDUSD', 'USD', 'BUSD', 'DAI', 'EUR', 'BTC', 'ETH', 'BNB', 'UST', 'USTF0']
         
-        # Try exact pattern matching
-        for symbol, patterns in known_symbols.items():
-            for pattern in patterns:
-                if re.match(pattern, market_clean):
-                    # Additional validation: ensure it's not a false positive
-                    if self._validate_symbol_match(market_clean, symbol):
-                        return symbol
+        # Handle special formats first
+        base_symbol = self._extract_from_special_formats(market_clean, market_part)
+        if base_symbol:
+            return base_symbol
+            
+        # Handle dash format first: SYMBOL-QUOTE or SYMBOL-QUOTE-SWAP
+        if '-' in market_clean:
+            parts = market_clean.split('-')
+            if len(parts) >= 2:
+                first_part = parts[0]
+                if first_part and len(first_part) >= 2:
+                    # Check if it's a known quote (avoid false positives)
+                    remaining = '-'.join(parts[1:])
+                    for quote in sorted(quote_currencies, key=len, reverse=True):
+                        if remaining.startswith(quote) or remaining == quote:
+                            return first_part
+                    # If no quote match, still return first part if it looks like a symbol
+                    if first_part.isalpha() and 2 <= len(first_part) <= 6:
+                        return first_part
+        
+        # Handle underscore format: SYMBOL_QUOTE
+        if '_' in market_clean:
+            parts = market_clean.split('_')
+            if len(parts) >= 2:
+                first_part = parts[0]
+                if first_part and len(first_part) >= 2:
+                    # Check if remaining looks like quote currency
+                    remaining = '_'.join(parts[1:])
+                    for quote in sorted(quote_currencies, key=len, reverse=True):
+                        if remaining.startswith(quote) or remaining == quote:
+                            return first_part
+                    # If no quote match, still return first part if it looks like a symbol
+                    if first_part.isalpha() and 2 <= len(first_part) <= 6:
+                        return first_part
                         
+        # Standard extraction: remove quote currencies from end
+        for quote in sorted(quote_currencies, key=len, reverse=True):  # Try longest first
+            if market_clean.endswith(quote):
+                base = market_clean[:-len(quote)]
+                if base and len(base) >= 2:  # Valid base symbol
+                    return base
+        
+        # If no quote currency found, try common patterns
+        return self._extract_from_common_patterns(market_clean)
+    
+    def _extract_from_special_formats(self, market_clean: str, market_original: str = None) -> Optional[str]:
+        """Extract from special exchange formats"""
+        
+        # Kraken: XBT -> BTC conversion
+        if market_clean.startswith('XBT'):
+            return 'BTC'
+        
+        # Phemex: starts with lowercase 's' for spot (e.g., sBTCUSDT) - check original case
+        if (market_original and market_original.startswith('s') and len(market_original) > 1 and 
+            any(c.isupper() for c in market_original[1:])):  # Must have uppercase after 's'
+            return self.extract_symbol_from_market(f":{market_original[1:]}")
+        
+        # KuCoin: ends with 'M' for perpetuals (ARBUSDTM -> ARB)
+        if market_clean.endswith('M') and len(market_clean) > 1:
+            base_without_m = market_clean[:-1]
+            return self.extract_symbol_from_market(f":{base_without_m}")
+        
+        # SWAP format: SYMBOL-QUOTE-SWAP
+        if market_clean.endswith('-SWAP'):
+            swap_removed = market_clean[:-5]  # Remove '-SWAP'
+            return self.extract_symbol_from_market(f":{swap_removed}")
+        
+        # Bitfinex futures: SYMBOLUSDT -> SYMBOL
+        if 'F0:USTF0' in market_clean:
+            base = market_clean.split('F0:USTF0')[0]  # Take part before F0:USTF0
+            return base if base else None
+            
+        return None
+    
+    def _extract_from_common_patterns(self, market_clean: str) -> Optional[str]:
+        """Extract from common patterns when no quote currency match"""
+        
+        # Handle specific edge cases first
+        # GATEIO format: SYMBOL_QUOTE-SPOT  
+        if market_clean.endswith('-SPOT'):
+            base_without_spot = market_clean[:-5]  # Remove '-SPOT'
+            return self.extract_symbol_from_market(f":{base_without_spot}")
+        
+        # If it's 2-10 characters and looks like a symbol, return it
+        if 2 <= len(market_clean) <= 10 and market_clean.isalpha():
+            return market_clean
+        
+        # Try to find the symbol part (before numbers/special chars)
+        symbol_match = re.match(r'^([A-Z]{2,10})', market_clean)  # Allow up to 10 chars for longer symbols
+        if symbol_match:
+            return symbol_match.group(1)
+            
         return None
         
     def _validate_symbol_match(self, market_clean: str, symbol: str) -> bool:
