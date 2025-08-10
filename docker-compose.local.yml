@@ -1,0 +1,173 @@
+# Docker Compose for Local MacBook - Development & Strategy Execution
+# This connects to remote InfluxDB on your server
+
+name: squeezeflow-local
+
+networks:
+  squeezeflow_network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  freqtrade_data:
+    driver: local
+
+services:
+  # Redis - Local Caching and Message Queue
+  redis:
+    container_name: squeezeflow-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    networks:
+      - squeezeflow_network
+
+  # Strategy Runner Service - Connects to Remote InfluxDB
+  strategy-runner:
+    container_name: squeezeflow-strategy-runner
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.strategy-runner
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+      - SQUEEZEFLOW_RUN_INTERVAL=1
+      - SQUEEZEFLOW_MAX_SYMBOLS=3
+      - SQUEEZEFLOW_LOOKBACK_HOURS=1
+      - SQUEEZEFLOW_TIMEFRAME=1m
+      - SQUEEZEFLOW_MIN_DATA_POINTS=40
+      - SQUEEZEFLOW_LOG_LEVEL=DEBUG
+      - SQUEEZEFLOW_ENABLE_1S_MODE=true
+      - SQUEEZEFLOW_DATA_INTERVAL=1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      # REMOTE INFLUXDB CONNECTION - UPDATE WITH YOUR SERVER IP
+      - INFLUX_HOST=${SERVER_IP:-your.server.ip}  # Set SERVER_IP env var or replace with actual IP
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - INFLUX_USERNAME=
+      - INFLUX_PASSWORD=
+      - FREQTRADE_API_URL=http://freqtrade:8080
+      - FREQTRADE_API_USERNAME=0xGang
+      - FREQTRADE_API_PASSWORD=0xGang
+      - FREQTRADE_API_TIMEOUT=10
+      - FREQTRADE_ENABLE_INTEGRATION=true
+    depends_on:
+      - redis
+    volumes:
+      - ./freqtrade/config/config.json:/app/freqtrade/user_data/config.json:ro
+    networks:
+      - squeezeflow_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # For accessing host network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis(host='redis', port=6379); r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Freqtrade - Trading Bot
+  freqtrade:
+    container_name: squeezeflow-freqtrade
+    image: freqtradeorg/freqtrade:stable_freqai
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./freqtrade/user_data:/freqtrade/user_data
+      - ./freqtrade/config/config.json:/freqtrade/config/config.json:ro
+    depends_on:
+      - redis
+      - strategy-runner
+    networks:
+      - squeezeflow_network
+    command: >
+      trade
+      --config /freqtrade/config/config.json
+      --strategy SqueezeFlowFreqAI
+      --logfile /freqtrade/user_data/logs/freqtrade.log
+
+  # Health Monitor - Connects to Remote InfluxDB
+  health-monitor:
+    container_name: squeezeflow-health-monitor
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/health_monitor.py
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # REMOTE INFLUXDB CONNECTION
+      - INFLUX_HOST=${SERVER_IP:-your.server.ip}
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - strategy-runner
+    networks:
+      - squeezeflow_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/monitoring:/app/data/monitoring
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # Performance Monitor
+  performance-monitor:
+    container_name: squeezeflow-performance-monitor
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/performance_monitor.py
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # REMOTE INFLUXDB CONNECTION
+      - INFLUX_HOST=${SERVER_IP:-your.server.ip}
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - health-monitor
+    networks:
+      - squeezeflow_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/monitoring:/app/data/monitoring
+      - ./data/charts:/app/data/charts
+
+  # Signal Monitor Dashboard
+  signal-monitor-dashboard:
+    container_name: squeezeflow-signal-dashboard
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.squeezeflow
+    command: python services/signal_monitor_dashboard.py
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - strategy-runner
+    networks:
+      - squeezeflow_network
+    volumes:
+      - ./data/logs:/app/data/logs
+    tty: true
+    stdin_open: true

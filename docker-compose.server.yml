@@ -1,0 +1,90 @@
+# Docker Compose for Server - Data Collection Only
+# This runs on your server for 24/7 data collection
+
+name: squeezeflow-server
+
+networks:
+  aggr_backend:
+    driver: bridge
+
+volumes:
+  influxdb_data:
+    driver: local
+
+services:
+  # InfluxDB - Time-series Database
+  aggr-influx:
+    container_name: aggr-influx
+    image: influxdb:1.8.10
+    restart: unless-stopped
+    ports:
+      - "8086:8086"  # Expose to external network for remote access
+    volumes:
+      - influxdb_data:/var/lib/influxdb
+    environment:
+      - INFLUXDB_DB=significant_trades
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=admin123  # CHANGE THIS IN PRODUCTION!
+      - INFLUXDB_DATA_CACHE_MAX_MEMORY_SIZE=2g
+      - INFLUXDB_DATA_CACHE_SNAPSHOT_MEMORY_SIZE=50m
+      - INFLUXDB_DATA_MAX_CONCURRENT_COMPACTIONS=3
+      - INFLUXDB_HTTP_AUTH_ENABLED=false  # Enable auth in production
+      - INFLUXDB_HTTP_BIND_ADDRESS=:8086
+      - INFLUXDB_HTTP_LOG_ENABLED=false
+    networks:
+      - aggr_backend
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8192M
+        reservations:
+          cpus: '1.0'
+          memory: 4096M
+
+  # aggr-server - Real-time Data Collection
+  aggr-server:
+    container_name: aggr-server
+    build:
+      context: ./aggr-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # Optional - only if you want aggr-server UI accessible
+    environment:
+      - PORT=3000
+      - WORKDIR=/usr/src/app/
+      - FILES_LOCATION=./data
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - NODE_ENV=production
+    volumes:
+      - ./aggr-server:/usr/src/app/
+    networks:
+      - aggr_backend
+    depends_on:
+      - aggr-influx
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 1024M
+
+  # Chronograf - InfluxDB Admin UI (Optional)
+  aggr-chronograf:
+    container_name: aggr-chronograf
+    image: chronograf:latest
+    restart: unless-stopped
+    volumes:
+      - ./aggr-server/data/chronograf:/var/lib/chronograf
+    ports:
+      - '8888:8888'
+    environment:
+      - 'INFLUXDB_URL=http://aggr-influx:8086'
+    depends_on:
+      - aggr-influx
+    networks:
+      - aggr_backend
