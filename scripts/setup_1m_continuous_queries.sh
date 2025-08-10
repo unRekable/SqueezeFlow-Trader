@@ -31,26 +31,8 @@ echo -e "${YELLOW}2. Creating continuous query for 1-minute OHLCV aggregation...
 # Drop existing CQ if it exists
 influx_exec "DROP CONTINUOUS QUERY cq_trades_1m ON significant_trades" || true
 
-# Create 1-minute continuous query
-read -r -d '' CQ_QUERY << 'EOF' || true
-CREATE CONTINUOUS QUERY cq_trades_1m ON significant_trades 
-BEGIN 
-  SELECT 
-    FIRST(open) AS open,
-    MAX(high) AS high,
-    MIN(low) AS low,
-    LAST(close) AS close,
-    SUM(vbuy) AS vbuy,
-    SUM(vsell) AS vsell,
-    SUM(cbuy) AS cbuy,
-    SUM(csell) AS csell,
-    SUM(lbuy) AS lbuy,
-    SUM(lsell) AS lsell
-  INTO "rp_1m"."trades_1m"
-  FROM "aggr_1s"."trades_1s"
-  GROUP BY time(1m), market
-END
-EOF
+# Create 1-minute continuous query (single line format for InfluxDB)
+CQ_QUERY='CREATE CONTINUOUS QUERY cq_trades_1m ON significant_trades BEGIN SELECT FIRST(open) AS open, MAX(high) AS high, MIN(low) AS low, LAST(close) AS close, SUM(vbuy) AS vbuy, SUM(vsell) AS vsell, SUM(cbuy) AS cbuy, SUM(csell) AS csell, SUM(lbuy) AS lbuy, SUM(lsell) AS lsell INTO "rp_1m"."trades_1m" FROM "aggr_1s"."trades_1s" GROUP BY time(1m), market END'
 
 influx_exec "$CQ_QUERY"
 
