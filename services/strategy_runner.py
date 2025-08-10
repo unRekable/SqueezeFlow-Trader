@@ -507,9 +507,10 @@ class StrategyRunner:
             # Calculate time range with limited lookback for real-time efficiency
             end_time = datetime.now()
             
-            # For real-time trading, use limited lookback to improve performance
-            # 30 minutes provides sufficient data for strategy while keeping queries fast
-            max_lookback_minutes = 30
+            # For real-time trading, use sufficient lookback for multi-timeframe analysis
+            # 4 hours provides enough data for all timeframes (1m, 5m, 15m, 30m, 1h, 4h)
+            # We have 24+ hours of 1s data available in aggr_1s retention policy
+            max_lookback_minutes = 240  # 4 hours for proper multi-timeframe analysis
             start_time = end_time - timedelta(minutes=max_lookback_minutes)
             
             # Use async data loading with 1-second data preference

@@ -20,6 +20,10 @@ import json
 from functools import lru_cache
 import hashlib
 
+# Singleton instance to prevent connection explosion
+_influx_client_instance = None
+_instance_lock = threading.Lock()
+
 
 @dataclass
 class QueryPerformanceMetrics:
@@ -51,7 +55,7 @@ class QueryOptimization:
 class OptimizedInfluxClient:
     """High-performance InfluxDB client with query optimization"""
     
-    def __init__(self, host='localhost', port=8086, username='', password='', 
+    def __init__(self, host=None, port=None, username='', password='', 
                  database='significant_trades', optimization_config: QueryOptimization = None):
         """
         Initialize optimized InfluxDB client
@@ -64,8 +68,10 @@ class OptimizedInfluxClient:
             database: Default database
             optimization_config: Query optimization settings
         """
-        self.host = host
-        self.port = port
+        import os
+        # Use environment variables if not specified - fixes container networking
+        self.host = host or os.getenv('INFLUX_HOST', 'localhost')
+        self.port = port or int(os.getenv('INFLUX_PORT', 8086))
         self.username = username
         self.password = password
         self.database = database
@@ -113,10 +119,10 @@ class OptimizedInfluxClient:
             """,
             'ohlcv_data': """
                 SELECT 
-                    mean(open) AS open,
-                    mean(high) AS high,
-                    mean(low) AS low,
-                    mean(close) AS close,
+                    FIRST(open) AS open,
+                    MAX(high) AS high,
+                    MIN(low) AS low,
+                    LAST(close) AS close,
                     sum(vbuy) + sum(vsell) AS volume
                 FROM "aggr_1s".trades_1s
                 WHERE ({market_conditions})
@@ -820,22 +826,42 @@ class OptimizedInfluxClient:
     async def _check_1s_data_availability(self, markets: List[str], start_time: datetime, end_time: datetime) -> Dict:
         """Check if 1-second data is available and recent"""
         try:
-            # Check for recent data in aggr_1s retention policy
-            check_query = """
+            # More robust check: look for data within our actual query window
+            # This avoids timezone issues by checking for data in the requested range
+            check_query = f"""
                 SELECT COUNT(*) as data_points
                 FROM "aggr_1s"."trades_1s"
-                WHERE time > now() - 5m
+                WHERE time >= '{start_time.isoformat()}Z' 
+                AND time <= '{end_time.isoformat()}Z'
                 LIMIT 1
             """
             
             result = await self.execute_query_async(check_query, 'significant_trades', enable_cache=False)
             
-            has_recent_data = not result.empty and result.iloc[0].get('data_points', 0) > 0
+            # Also check for recent data (as a secondary validation)
+            recent_check_query = """
+                SELECT COUNT(*) as recent_points
+                FROM "aggr_1s"."trades_1s"
+                WHERE time > now() - 10m
+                LIMIT 1
+            """
+            recent_result = await self.execute_query_async(recent_check_query, 'significant_trades', enable_cache=False)
+            
+            has_data_in_range = not result.empty and result.iloc[0].get('data_points', 0) > 0
+            has_recent_data = not recent_result.empty and recent_result.iloc[0].get('recent_points', 0) > 0
+            
+            # Use data if it exists in the requested range OR if there's recent data
+            has_usable_data = has_data_in_range or has_recent_data
+            
+            if not has_usable_data:
+                self.logger.debug(f"No 1s data found - in range: {has_data_in_range}, recent: {has_recent_data}")
             
             return {
-                'has_recent_data': has_recent_data,
-                'measurement_exists': True if has_recent_data else False,
-                'check_timestamp': datetime.now().isoformat()
+                'has_recent_data': has_usable_data,
+                'measurement_exists': True if has_usable_data else False,
+                'check_timestamp': datetime.now().isoformat(),
+                'data_in_range': has_data_in_range,
+                'recent_data': has_recent_data
             }
             
         except Exception as e:
@@ -1008,6 +1034,31 @@ class OptimizedInfluxClient:
         except Exception as e:
             self.logger.error(f"Error closing InfluxDB client: {e}")
 
+
+# Singleton getter to prevent connection explosion
+def get_influx_client(host=None, port=None, database='significant_trades', 
+                      optimization_config=None) -> OptimizedInfluxClient:
+    """
+    Get singleton InfluxDB client instance
+    
+    This prevents creating multiple connection pools which causes hangs
+    """
+    import os
+    global _influx_client_instance
+    
+    # Use environment variables if not specified - fixes container networking
+    final_host = host or os.getenv('INFLUX_HOST', 'localhost')
+    final_port = port or int(os.getenv('INFLUX_PORT', 8086))
+    
+    with _instance_lock:
+        if _influx_client_instance is None:
+            _influx_client_instance = OptimizedInfluxClient(
+                host=final_host,
+                port=final_port,
+                database=database,
+                optimization_config=optimization_config
+            )
+        return _influx_client_instance
 
 # Factory function for easy integration
 def create_optimized_influx_client(config: Dict) -> OptimizedInfluxClient:

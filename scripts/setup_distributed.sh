@@ -140,12 +140,18 @@ test_connection() {
         echo -e "${YELLOW}⚠ Database 'significant_trades' not found (will be created on first run)${NC}"
     fi
     
-    # Test data availability
+    # Test data availability (correct retention policy)
     echo "Checking for recent data..."
-    query="SELECT%20COUNT(*)%20FROM%20trades_1s%20WHERE%20time%20>%20now()%20-%201h"
+    query="SELECT%20COUNT(*)%20FROM%20%22aggr_1s%22.%22trades_1s%22%20WHERE%20time%20>%20now()%20-%2010m"
     response=$(curl -s "http://$SERVER_IP:8086/query?db=significant_trades&q=$query" 2>/dev/null)
     if echo "$response" | grep -q "values"; then
-        echo -e "${GREEN}✓ Recent data found in database${NC}"
+        # Extract count from response
+        count=$(echo "$response" | grep -o '"values":\[\[.*\]\]' | grep -o '[0-9]\+' | head -1)
+        if [ ! -z "$count" ] && [ "$count" -gt 0 ]; then
+            echo -e "${GREEN}✓ Recent data found: $count points in last 10 minutes${NC}"
+        else
+            echo -e "${YELLOW}⚠ No recent data found (aggr-server may need to collect data)${NC}"
+        fi
     else
         echo -e "${YELLOW}⚠ No recent data found (aggr-server may need to collect data)${NC}"
     fi

@@ -182,8 +182,8 @@ class ResetDetection:
             spot_dominance = 0.5
             futures_dominance = 0.5
         
-        # Use adaptive threshold for dominance detection
-        dominance_threshold = adaptive_significance_threshold(spot_cvd, 0.65)
+        # FIXED: More reasonable dominance threshold
+        dominance_threshold = 0.6  # Fixed threshold instead of adaptive
         
         # Identify dominant pattern
         if spot_dominance > dominance_threshold:
@@ -256,10 +256,11 @@ class ResetDetection:
         - Price momentum exhausting
         """
         
+        # FIXED: More lenient convergence thresholds
         detected = (
-            convergence['converging'] and
-            convergence['strength'] > 0.2 and
-            momentum_exhaustion['exhausted']
+            (convergence['converging'] and convergence['strength'] > 0.05) or  # Reduced from 0.2
+            (momentum_exhaustion['exhausted'] and convergence['strength'] > 0.02) or  # Alternative path
+            (momentum_exhaustion.get('deceleration', False) and convergence.get('rate', 0) < 0)  # Deceleration counts
         )
         
         return {
@@ -302,9 +303,9 @@ class ResetDetection:
         else:
             cvd_support = False
         
-        # Use adaptive threshold for detection
-        detection_threshold = adaptive_significance_threshold(closes, 0.5)
-        detected = (volatility_spike and (price_spike or cvd_support)) and momentum_analysis['momentum_score'] > detection_threshold
+        # FIXED: More lenient detection for Type B
+        detection_threshold = 0.02  # 2% move threshold
+        detected = (volatility_spike and (price_spike or cvd_support)) or momentum_analysis['momentum_score'] > detection_threshold
         
         return {
             'detected': detected,

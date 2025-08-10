@@ -1,5 +1,8 @@
 # SqueezeFlow Trader - Project Instructions
 
+## ⚠️ CRITICAL: Read SYSTEM_TRUTH.md First!
+**Before doing ANYTHING, read `/SYSTEM_TRUTH.md` for what actually works and what's broken.**
+
 ## 🎯 Core Behavioral Rules
 
 ### Priority #1: User Instructions Always Win
@@ -60,7 +63,27 @@ SQUEEZEFLOW_DATA_INTERVAL=1         # 1-second data collection
 SQUEEZEFLOW_ENABLE_1S_MODE=true     # Enable all 1s optimizations
 SQUEEZEFLOW_MAX_SYMBOLS=3           # Reduced from 5 for real-time
 REDIS_MAXMEMORY=2gb                 # Increased for 1s data buffering
-INFLUX_RETENTION_1S=24h             # 24-hour 1s data retention
+INFLUX_RETENTION_1S=7d              # 7-day 1s data retention (extended from 24h)
+```
+
+### 📁 Data Storage and Retention Policies
+
+**InfluxDB Retention Policy Configuration:**
+- **aggr_1s**: 7 days of 1-second data (was 24 hours, extended for backtesting)
+  - Location: `significant_trades.aggr_1s.trades_1s`
+  - Storage: ~10-20GB per symbol (600M data points)
+  - Purpose: Real-time trading and recent backtesting
+- **rp_1s**: 30 days of aggregated data
+  - Location: `significant_trades.rp_1s.*`
+  - Purpose: Long-term analysis and validation
+
+**Setting Up Retention Policies:**
+```bash
+# Extend 1s data retention to 7 days
+./scripts/setup_retention_policies.sh
+
+# Verify retention policies
+docker exec aggr-influx influx -execute "SHOW RETENTION POLICIES ON significant_trades"
 ```
 
 ### 📊 Real-Time Performance Monitoring
@@ -189,6 +212,63 @@ docker exec aggr-influx influx -execute "SHOW SERIES CARDINALITY ON significant_
 - Use `docker-compose logs [service]` for debugging
 - Restart specific service: `docker-compose restart [service]`
 - Full restart: `docker-compose down && docker-compose up -d`
+
+### 🕐 Timezone Issues and Data Timestamps
+
+**CRITICAL: All data is stored in UTC**
+- InfluxDB stores all timestamps in UTC (Coordinated Universal Time)
+- System logs display times in UTC
+- Local time conversion happens only for display
+
+**Common Timezone Confusion:**
+```bash
+# Check current time in UTC
+date -u
+
+# Check InfluxDB latest data (shows UTC timestamps)
+docker exec aggr-influx influx -execute "SELECT * FROM trades_1s ORDER BY time DESC LIMIT 1" -database significant_trades
+
+# Example timezone conversions:
+# UTC 19:06 = CEST 21:06 (Central European Summer Time, UTC+2)
+# UTC 08:39 = CEST 10:39
+```
+
+**Debugging Data Availability:**
+```bash
+# Check if data is actively flowing (last 10 seconds)
+docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM trades_1s WHERE time > now() - 10s" -database significant_trades
+
+# Check data retention window (shows oldest data)
+docker exec aggr-influx influx -execute "SELECT * FROM trades_1s ORDER BY time ASC LIMIT 1" -database significant_trades
+
+# Check total data points in retention policy
+docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM aggr_1s.trades_1s" -database significant_trades
+```
+
+**Backtest Time Range Considerations:**
+- Always specify times in UTC for backtests
+- Account for retention policy limits (7 days for 1s data)
+- Data before retention window is automatically deleted
+
+### 📊 Data Location and Retention Issues
+
+**Finding Your Data:**
+```bash
+# 1-second data is in aggr_1s retention policy
+docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM aggr_1s.trades_1s" -database significant_trades
+
+# Check all retention policies
+docker exec aggr-influx influx -execute "SHOW RETENTION POLICIES ON significant_trades"
+
+# Find data range available for backtesting
+docker exec aggr-influx influx -execute "SELECT MIN(time), MAX(time) FROM aggr_1s.trades_1s" -database significant_trades
+```
+
+**Retention Policy Limits:**
+- **aggr_1s**: Only keeps 7 days of data (extended from 24h)
+- Data older than 7 days is automatically deleted
+- Plan backtests within the retention window
+- For longer backtests, consider using higher timeframes (5m, 15m)
 
 ## 🚫 Anti-Patterns to Avoid
 

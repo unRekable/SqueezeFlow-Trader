@@ -1,5 +1,6 @@
 # Docker Compose for Local MacBook - Development & Strategy Execution
 # This connects to remote InfluxDB on your server
+# NO local aggr-server or InfluxDB - uses remote server for data
 
 name: squeezeflow-local
 

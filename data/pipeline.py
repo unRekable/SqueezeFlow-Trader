@@ -44,20 +44,18 @@ class DataPipeline:
                 # DNS resolution failed, stick with localhost
                 influx_host = 'localhost'
         
-        # Create client with extended timeout and increased connection pool
-        from .loaders.influx_client import QueryOptimization
+        # Use singleton client to prevent connection explosion
+        from .loaders.influx_client import get_influx_client, QueryOptimization
         optimization_config = QueryOptimization(
-            connection_pool_size=25,  # Increased for better parallelism
+            connection_pool_size=10,  # Reduced - singleton shares pool
             query_timeout_seconds=300,  # Extended timeout for large backtests
             enable_query_cache=True,
             cache_ttl_seconds=300
         )
         
-        self.influx_client = OptimizedInfluxClient(
+        self.influx_client = get_influx_client(
             host=influx_host,
             port=8086,
-            username='',
-            password='',
             database='significant_trades',
             optimization_config=optimization_config
         )

@@ -200,19 +200,10 @@ class SymbolDiscovery:
             
             # Use Docker exec method instead of standard client
             points = self._execute_influx_query(query)
-            if points:
-                # Convert to expected format
-                data = {"results": [{"series": [{"values": [[point.get('count', 0)] for point in points]}]}]}
-            else:
-                data = None
-            
-            if data and 'results' in data and data['results']:
-                result = data['results'][0]
-                if 'series' in result and result['series']:
-                    series = result['series'][0]
-                    if 'values' in series and series['values']:
-                        data_points = series['values'][0][1]  # Second column is data_points
-                        return int(data_points) if data_points else 0
+            if points and len(points) > 0:
+                # Get the data_points value from the first point
+                data_points = points[0].get('data_points', 0)
+                return int(data_points) if data_points else 0
             return 0
             
         except Exception as e:

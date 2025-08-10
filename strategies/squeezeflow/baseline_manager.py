@@ -368,7 +368,7 @@ def create_cvd_baseline_manager_from_config(config_manager) -> CVDBaselineManage
     Returns:
         CVDBaselineManager instance
     """
-    from services.config.service_config import ConfigManager
+    from services.config.unified_config import ConfigManager
     
     # Create Redis client
     redis_config = config_manager.get_redis_config()

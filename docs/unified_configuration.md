@@ -28,7 +28,7 @@ The SqueezeFlow Trader system is configured through environment variables define
 | `SQUEEZEFLOW_ENABLE_1S_MODE` | boolean | **true** | false | Enable 1-second optimizations and processing |
 | `SQUEEZEFLOW_MAX_SYMBOLS` | integer | **3** | 5 | Max symbols for real-time (reduced for 1s performance) |
 | `REDIS_MAXMEMORY` | string | **2gb** | 2gb | Redis memory limit (increased for 1s data buffering) |
-| `INFLUX_RETENTION_1S` | string | **24h** | - | 1-second data retention policy (24h rolling window) |
+| `INFLUX_RETENTION_1S` | string | **7d** | - | 1-second data retention policy (7-day window for backtesting) |
 | `SQUEEZEFLOW_1S_BUFFER_SIZE` | integer | **3600** | - | 1-second data buffer size (3600 = 1 hour buffer) |
 | `SQUEEZEFLOW_1S_BATCH_SIZE` | integer | **100** | - | Batch size for 1s data processing optimization |
 | `SQUEEZEFLOW_BACKTEST_STEP_SECONDS` | integer | **1** | - | Backtest step size for 1s mode (evaluates every second) |
@@ -48,7 +48,7 @@ environment:
   # 💾 MEMORY OPTIMIZATION FOR 1S DATA
   - REDIS_MAXMEMORY=2gb                   # Increased Redis memory
   - REDIS_MAXMEMORY_POLICY=allkeys-lru    # LRU eviction for 1s data
-  - INFLUX_RETENTION_1S=24h               # 24-hour 1s data retention
+  - INFLUX_RETENTION_1S=7d                # 7-day 1s data retention (extended for backtesting)
   - SQUEEZEFLOW_1S_BUFFER_SIZE=3600       # 1-hour data buffer
   
   # ⚡ PROCESSING OPTIMIZATIONS  
@@ -106,7 +106,7 @@ production_warnings:
 | `INFLUX_DATABASE` | string | `significant_trades` | `significant_trades` | Target database name |
 | `INFLUX_USERNAME` | string | ` ` | ` ` | Authentication username (optional) |
 | `INFLUX_PASSWORD` | string | ` ` | ` ` | Authentication password (optional) |
-| `INFLUX_RETENTION_1S` | string | `-` | **24h** | 1-second data retention policy (NEW) |
+| `INFLUX_RETENTION_1S` | string | `-` | **7d** | 1-second data retention policy (extended to 7 days) |
 | `INFLUX_BATCH_SIZE` | integer | `1000` | **100** | Batch size for 1s writes (optimized) |
 | `INFLUX_FLUSH_INTERVAL` | integer | `10` | **1** | Flush interval seconds (real-time) |
 
@@ -160,7 +160,7 @@ environment:
   - REDIS_MAXMEMORY=2gb                   # Increased memory for 1s buffering
   - REDIS_MAXMEMORY_POLICY=allkeys-lru    # Efficient eviction policy
   - REDIS_TIMEOUT=1                       # Low-latency connections
-  - INFLUX_RETENTION_1S=24h               # 24-hour 1s retention
+  - INFLUX_RETENTION_1S=7d                # 7-day 1s retention (for backtesting)
   - INFLUX_BATCH_SIZE=100                 # Optimized batch size
   - INFLUX_FLUSH_INTERVAL=1               # Real-time flushing
   

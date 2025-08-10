@@ -1,0 +1,41 @@
+# Timezone override configuration
+# Ensures all services use UTC consistently
+version: '3.8'
+
+services:
+  aggr-server:
+    environment:
+      - TZ=UTC
+  
+  aggr-influx:
+    environment:
+      - TZ=UTC
+  
+  strategy-runner:
+    environment:
+      - TZ=UTC
+      - INFLUX_TIMEZONE=UTC
+  
+  freqtrade:
+    environment:
+      - TZ=UTC
+  
+  redis:
+    environment:
+      - TZ=UTC
+  
+  health-monitor:
+    environment:
+      - TZ=UTC
+  
+  performance-monitor:
+    environment:
+      - TZ=UTC
+  
+  signal-dashboard:
+    environment:
+      - TZ=UTC
+  
+  oi-tracker:
+    environment:
+      - TZ=UTC

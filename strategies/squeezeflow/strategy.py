@@ -120,6 +120,15 @@ class SqueezeFlowStrategy(BaseStrategy):
         Returns:
             Dict with orders list and phase analysis results
         """
+        # Handle None dataset
+        if dataset is None:
+            return {
+                'orders': [],
+                'phase_results': {},
+                'error': 'Dataset is None',
+                'metadata': {'strategy': self.name}
+            }
+        
         try:
             symbol = dataset.get('symbol', 'UNKNOWN')
             self.logger.debug(f"Processing {symbol} - Starting analysis")
@@ -138,6 +147,8 @@ class SqueezeFlowStrategy(BaseStrategy):
             
             # Check for existing positions FIRST
             existing_positions = self._get_symbol_positions(portfolio_state, symbol)
+            
+            self.logger.info(f"🔍 {symbol}: Checking positions - Found {len(existing_positions)} positions")
             
             if existing_positions:
                 # If we have positions, ONLY run Phase 5 (exit management)
@@ -224,7 +235,12 @@ class SqueezeFlowStrategy(BaseStrategy):
                     return results
                 
                 # Generate orders if score >= minimum threshold
-                if scoring_result.get('should_trade', False):
+                should_trade = scoring_result.get('should_trade', False)
+                total_score = scoring_result.get('total_score', 0)
+                
+                self.logger.info(f"📊 {symbol}: Score={total_score:.2f}/10, Should Trade={should_trade}, Min={self.config.min_entry_score}")
+                
+                if should_trade:
                     orders = self._generate_entry_orders(
                         scoring_result, dataset, portfolio_state
                     )

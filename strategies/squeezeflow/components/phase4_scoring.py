@@ -74,6 +74,22 @@ class ScoringSystem:
             Dict containing score breakdown and trading decision
         """
         try:
+            # CRITICAL: Check for divergence first - no divergence = no trade!
+            divergence_detected = divergence.get('has_divergence', False)
+            if not divergence_detected:
+                return {
+                    'phase': 'SCORING_DECISION',
+                    'total_score': 0,
+                    'score_breakdown': {},
+                    'signal_quality': 'NONE',
+                    'signal_type': 'NO_DIVERGENCE',
+                    'confidence': 0,
+                    'should_trade': False,
+                    'direction': 'NONE',
+                    'reasoning': 'No CVD divergence detected - no trade opportunity',
+                    'timestamp': datetime.now(tz=pytz.UTC)
+                }
+            
             # Extract market data
             ohlcv = dataset.get('ohlcv', pd.DataFrame())
             spot_cvd = dataset.get('spot_cvd', pd.Series())
@@ -87,10 +103,11 @@ class ScoringSystem:
                 'cvd_reset_deceleration': 0,
                 'absorption_candle': 0,
                 'failed_breakdown': 0,
-                'directional_bias': 0
+                'directional_bias': 0,
+                'oi_confirmation': 0  # NEW: OI validation bonus
             }
             
-            # Score components (modified to be less dependent on strict reset detection)
+            # Score components (only if divergence exists)
             reset_detected = reset.get('reset_detected', False)
             
             # 1. CVD Reset Deceleration (3.5 points)
@@ -117,11 +134,31 @@ class ScoringSystem:
                 ohlcv, spot_cvd, futures_cvd, context
             )
             
+            # 5. OI Confirmation Bonus (up to 2.0 points bonus, -1.0 penalty)
+            # This is CRITICAL for squeeze validation
+            oi_confirmed = divergence.get('oi_confirmed', False)
+            oi_data = divergence.get('oi_data', {})
+            
+            if oi_data:  # Only score if OI data is available
+                if oi_confirmed:
+                    # Strong OI rise = strong squeeze confirmation
+                    oi_change = oi_data.get('change_pct', 0)
+                    if oi_change >= 10.0:  # Very strong OI rise
+                        scores['oi_confirmation'] = 2.0
+                    elif oi_change >= 5.0:  # Good OI rise
+                        scores['oi_confirmation'] = 1.5
+                    else:  # Minimal OI rise
+                        scores['oi_confirmation'] = 0.5
+                else:
+                    # No OI confirmation - penalize the score
+                    scores['oi_confirmation'] = -1.0  # Penalty for no OI rise
+            
             # Apply reset bonus: if reset detected, multiply total score by 1.5
             if reset_detected:
                 # Award bonus for having proper reset confirmation
                 for key in scores:
-                    scores[key] *= 1.2  # 20% bonus for confirmed reset
+                    if key != 'oi_confirmation':  # Don't multiply OI score
+                        scores[key] *= 1.2  # 20% bonus for confirmed reset
             
             # Calculate total score
             total_score = sum(scores.values())
@@ -179,21 +216,21 @@ class ScoringSystem:
         convergence = reset.get('convergence', {})
         convergence_strength = convergence.get('strength', 0)
         
-        # Score based on convergence strength (tightened for 1s data)
-        if convergence_strength > 0.6:  # Strong convergence (was 0.5)
-            score += max_score * 0.4  # Reduced multiplier
-        elif convergence_strength > 0.4:  # Moderate convergence (was 0.3)
-            score += max_score * 0.25  # Reduced multiplier
-        elif convergence_strength > 0.25:  # Weak convergence (was 0.1)
-            score += max_score * 0.15  # Reduced multiplier
+        # Score based on convergence strength (relaxed for real market conditions)
+        if convergence_strength > 0.3:  # Strong convergence
+            score += max_score * 0.8
+        elif convergence_strength > 0.1:  # Moderate convergence
+            score += max_score * 0.5
+        elif convergence_strength > 0.01:  # Weak convergence
+            score += max_score * 0.3
         elif len(spot_cvd) >= 10:
             # Even without convergence, look for CVD relationship patterns
             spot_recent_change = abs(spot_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             futures_recent_change = abs(futures_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             
-            # If both CVDs are showing similar patterns, award some points (stricter for 1s)
-            if abs(spot_recent_change - futures_recent_change) < max(spot_recent_change, futures_recent_change) * 0.3:
-                score += max_score * 0.05  # Smaller reward for CVD alignment
+            # If both CVDs are showing similar patterns, award some points
+            if abs(spot_recent_change - futures_recent_change) < max(spot_recent_change, futures_recent_change) * 0.5:
+                score += max_score * 0.2  # Reward for CVD alignment
             
         # Check for deceleration pattern
         if len(spot_cvd) >= 20:
@@ -201,12 +238,12 @@ class ScoringSystem:
             recent_movement = abs(spot_cvd.iloc[-5:].pct_change(fill_method=None).mean())
             earlier_movement = abs(spot_cvd.iloc[-20:-10].pct_change(fill_method=None).mean())
             
-            if earlier_movement > 0.001 and recent_movement < earlier_movement * 0.4:  # Stricter thresholds
+            if earlier_movement > 0.0001 and recent_movement < earlier_movement * 0.7:  # More lenient
                 # Strong deceleration detected
-                score += max_score * 0.25  # Reduced multiplier
-            elif earlier_movement > 0.0005 and recent_movement < earlier_movement * 0.6:  # Stricter
+                score += max_score * 0.4
+            elif earlier_movement > 0.00005 and recent_movement < earlier_movement * 0.8:  # More lenient
                 # Moderate deceleration
-                score += max_score * 0.15  # Reduced multiplier
+                score += max_score * 0.25
                 
         # Check momentum exhaustion from reset
         if reset.get('momentum_exhaustion', {}).get('exhausted', False):
@@ -250,10 +287,10 @@ class ScoringSystem:
         for idx in range(len(recent_candles)):
             candle = recent_candles.iloc[idx]
             
-            # Check for buyers stepping in (require meaningful move for 1s data)
-            if candle[close_col] > candle[open_col] * 1.0002:  # 0.02% minimum move
+            # Check for buyers stepping in (more lenient threshold)
+            if candle[close_col] > candle[open_col]:  # Any green candle
                 absorption_count += 1
-                score += max_score * 0.1  # Reduced multiplier
+                score += max_score * 0.15
                 
             # Check for wick rejection (wick below but close above)
             wick_size = (candle[close_col] - candle[low_col]) / (candle[high_col] - candle[low_col] + 0.0001)
@@ -363,12 +400,12 @@ class ScoringSystem:
         if pd.isna(futures_recent):
             futures_recent = 0
             
-        # Check if both CVDs moving in same direction (much stricter for 1s data)
+        # Check if both CVDs moving in same direction (more reasonable thresholds)
         cvd_aligned = np.sign(spot_recent) == np.sign(futures_recent)
-        if cvd_aligned and abs(spot_recent) > 0.002:  # 20x stricter threshold
-            score += max_score * 0.4  # Reduced multiplier
-        elif abs(spot_recent) > 0.001:  # 10x stricter threshold
-            score += max_score * 0.2  # Reduced multiplier
+        if cvd_aligned and abs(spot_recent) > 0.0001:  # More lenient
+            score += max_score * 0.5
+        elif abs(spot_recent) > 0.00005:  # More lenient
+            score += max_score * 0.3
             
         # Check if price follows CVD
         price_recent = ohlcv[close_col].iloc[-5:].pct_change(fill_method=None).mean()
@@ -377,10 +414,10 @@ class ScoringSystem:
             
         price_follows_cvd = np.sign(price_recent) == np.sign(spot_recent) if spot_recent != 0 else False
         
-        if price_follows_cvd and abs(price_recent) > 0.001:  # 10x stricter
-            score += max_score * 0.25  # Reduced multiplier
-        elif abs(price_recent) > 0.0005:  # 5x stricter
-            score += max_score * 0.05  # Much smaller reward
+        if price_follows_cvd and abs(price_recent) > 0.0001:  # More lenient
+            score += max_score * 0.4
+        elif abs(price_recent) > 0.00005:  # More lenient
+            score += max_score * 0.2
             
         # Consider market context (always award some points for context alignment)
         market_bias = context.get('market_bias', 'NEUTRAL')

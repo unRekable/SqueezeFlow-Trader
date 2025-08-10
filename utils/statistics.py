@@ -248,7 +248,8 @@ class StatisticalProcessor:
         deceleration_signals = []
         
         for period in periods:
-            if len(closes) < period:
+            # Need at least period+1 points to look back
+            if len(closes) <= period:
                 continue
                 
             # Vectorized momentum calculation
@@ -261,7 +262,7 @@ class StatisticalProcessor:
             
             # Deceleration detection using numpy
             recent_closes = closes[-period:]
-            if len(recent_closes) >= 3:
+            if len(recent_closes) >= 3 and len(closes) > period//3:
                 # Check if momentum is decreasing
                 momentum_short = (closes[-1] - closes[-period//3-1]) / closes[-period//3-1] if closes[-period//3-1] != 0 else 0
                 deceleration = abs(momentum) > abs(momentum_short) * 1.2

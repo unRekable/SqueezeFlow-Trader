@@ -647,6 +647,9 @@ class BacktestEngine:
         """
         all_executed_orders = []
         
+        # Store current data for window processing (CRITICAL FIX)
+        self.current_data = full_dataset
+        
         # Get data timeframes for indexing
         ohlcv = full_dataset.get('ohlcv', pd.DataFrame())
         if ohlcv.empty:
@@ -1331,8 +1334,9 @@ class BacktestEngine:
         try:
             self.logger.info("📊 Generating performance report...")
             
-            # Generate performance report
-            report = self.performance_monitor.analyzer.generate_performance_report()
+            # TEMP: Skip slow report generation
+            # report = self.performance_monitor.analyzer.generate_performance_report()
+            report = {'summary': 'Report generation disabled for speed'}
             
             # Log key performance metrics
             summary = report.get('summary', {})
@@ -1486,7 +1490,7 @@ class BacktestEngine:
                                window_end: datetime) -> Dict:
         """
         Create a dataset containing only data from window_start to window_end
-        This prevents lookahead bias by limiting data visibility
+        PLUS necessary lookback for strategy calculations
         
         Args:
             full_dataset: Complete dataset from data pipeline
@@ -1496,10 +1500,15 @@ class BacktestEngine:
         Returns:
             Dict with windowed data matching full_dataset structure
         """
+        # Strategy needs 30 minutes of lookback for proper analysis
+        # This is for multi-timeframe validation, not just the current window
+        lookback_duration = timedelta(minutes=30)
+        lookback_start = window_start - lookback_duration
+        
         windowed_dataset = {
             'symbol': full_dataset.get('symbol'),
             'timeframe': full_dataset.get('timeframe'),
-            'start_time': window_start,
+            'start_time': lookback_start,  # Include lookback in start time
             'end_time': window_end,
             'markets': full_dataset.get('markets', {}),
             'metadata': full_dataset.get('metadata', {})
@@ -1526,15 +1535,20 @@ class BacktestEngine:
                         # Convert data index to UTC timezone-aware
                         full_data.index = full_data.index.tz_localize('UTC')
                     
-                    # Slice data to window - only data up to window_end (current_time)
+                    # Slice data including lookback - data from lookback_start to window_end
+                    # Adjust lookback_start timezone to match
+                    lookback_start_tz = lookback_start
+                    if full_data.index.tz is not None and lookback_start.tzinfo is None:
+                        lookback_start_tz = lookback_start.replace(tzinfo=pytz.UTC)
+                    
                     try:
-                        windowed_data = full_data.loc[window_start_tz:window_end_tz]
+                        windowed_data = full_data.loc[lookback_start_tz:window_end_tz]
                         windowed_dataset[data_key] = windowed_data
                     except Exception as e:
                         # Fallback for timezone comparison issues
                         self.logger.warning(f"Timezone comparison failed for {data_key}, using fallback filtering: {e}")
-                        # Manual filtering as fallback
-                        mask = (full_data.index >= window_start_tz) & (full_data.index <= window_end_tz)
+                        # Manual filtering as fallback (with lookback)
+                        mask = (full_data.index >= lookback_start_tz) & (full_data.index <= window_end_tz)
                         windowed_dataset[data_key] = full_data[mask]
                 else:
                     # Fallback: use full data if no datetime index

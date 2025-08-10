@@ -23,6 +23,14 @@ from utils.statistics import (
     set_1s_mode
 )
 
+# Import OI tracker for squeeze validation
+try:
+    from .oi_tracker import oi_tracker
+    OI_TRACKING_AVAILABLE = True
+except ImportError:
+    OI_TRACKING_AVAILABLE = False
+    print("Warning: OI tracking not available - squeeze signals may be less accurate")
+
 
 class DivergenceDetection:
     """
@@ -104,20 +112,55 @@ class DivergenceDetection:
             # Detect if divergence is significant
             is_significant = self._is_divergence_significant(volume_significance, cvd_patterns)
             
+            # Determine if we have actual divergence
+            # TRUE divergence only when spot and futures move OPPOSITE
+            true_divergence_patterns = ['SPOT_UP_FUTURES_DOWN', 'SPOT_DOWN_FUTURES_UP']
+            has_divergence = (
+                is_significant and 
+                setup_type not in ['NONE', 'UNKNOWN'] and
+                cvd_patterns.get('pattern') in true_divergence_patterns
+            )
+            
+            # OI Validation - CRITICAL for squeeze confirmation
+            oi_data = {}
+            oi_confirmed = False
+            
+            if has_divergence and OI_TRACKING_AVAILABLE:
+                # Only check OI if we have a divergence signal
+                symbol = dataset.get('symbol', 'BTC')
+                
+                # Validate squeeze with OI
+                oi_confirmed, oi_data = oi_tracker.validate_squeeze_signal(
+                    symbol, 
+                    divergence_detected=has_divergence
+                )
+                
+                # If OI not rising, reduce signal confidence
+                if not oi_confirmed:
+                    # Don't completely invalidate, but reduce confidence
+                    volume_significance['is_significant'] = False
+                    # Log the rejection
+                    print(f"⚠️ Divergence detected but OI not rising ({oi_data.get('change_pct', 0):.2f}%) - reducing confidence")
+            
             return {
                 'phase': 'DIVERGENCE_DETECTION',
+                'has_divergence': has_divergence,  # CRITICAL: Phase 4 needs this!
                 'setup_type': setup_type,
                 'price_pattern': price_pattern,
                 'cvd_patterns': cvd_patterns,
                 'volume_significance': volume_significance,
                 'is_significant': is_significant,
                 'market_imbalance': self._assess_market_imbalance(cvd_patterns),
+                'oi_data': oi_data,  # NEW: OI information
+                'oi_confirmed': oi_confirmed,  # NEW: OI validation result
+                'squeeze_valid': has_divergence and oi_confirmed,  # NEW: Full squeeze validation
                 'timestamp': datetime.now()
             }
             
         except Exception as e:
             return {
                 'phase': 'DIVERGENCE_DETECTION',
+                'has_divergence': False,
                 'error': f'Divergence detection error: {str(e)}',
                 'setup_type': 'NONE',
                 'is_significant': False
@@ -164,36 +207,81 @@ class DivergenceDetection:
         if spot_cvd.empty or futures_cvd.empty:
             return {'pattern': 'INSUFFICIENT_DATA', 'spot_direction': 0, 'futures_direction': 0}
         
-        # Use optimized rolling divergence analysis
-        divergence_analysis = rolling_divergence_analysis(
-            spot_cvd, futures_cvd, window_size=self.pattern_lookback
-        )
-        
-        if divergence_analysis['pattern'] == 'INSUFFICIENT_DATA':
-            return {
-                'pattern': 'INSUFFICIENT_DATA',
-                'spot_direction': 0,
-                'futures_direction': 0,
-                'divergence_strength': 0,
-                'recent_divergence': 0
-            }
-        
-        # Extract pattern information
-        pattern = divergence_analysis['pattern']
-        current_divergence = divergence_analysis['current_divergence']
-        z_score = divergence_analysis['z_score']
-        
-        # Calculate direction indicators
-        spot_direction = 1 if current_divergence > 0 else -1 if current_divergence < 0 else 0
-        futures_direction = -spot_direction  # Opposite by definition of divergence
-        
         # Use lookback for change calculations with safety checks
         lookback = min(self.pattern_lookback, len(spot_cvd) - 1)
         if lookback < 1:
             lookback = 1
         
+        # Calculate actual CVD changes
         spot_change = spot_cvd.iloc[-1] - spot_cvd.iloc[-lookback-1] if len(spot_cvd) > lookback else 0
         futures_change = futures_cvd.iloc[-1] - futures_cvd.iloc[-lookback-1] if len(futures_cvd) > lookback else 0
+        
+        # Calculate current divergence (futures - spot)
+        current_divergence = futures_cvd.iloc[-1] - spot_cvd.iloc[-1] if not cvd_divergence.empty else cvd_divergence.iloc[-1]
+        
+        # More sensitive pattern detection based on actual CVD movements
+        # FIXED: Use actual CVD changes instead of relying on z-score
+        pattern = 'BALANCED'
+        spot_direction = 0
+        futures_direction = 0
+        
+        # Determine directions based on actual changes
+        # TRUE DIVERGENCE: Spot and futures moving OPPOSITE directions
+        min_change_threshold = 1e6  # At least 1M volume change to be significant
+        
+        # Check if changes are significant
+        spot_significant = abs(spot_change) > min_change_threshold
+        futures_significant = abs(futures_change) > min_change_threshold
+        
+        if spot_significant or futures_significant:
+            # Check for TRUE divergence (opposite directions)
+            if spot_change > min_change_threshold and futures_change < -min_change_threshold:
+                # Spot UP, Futures DOWN = Long Setup potential
+                pattern = 'SPOT_UP_FUTURES_DOWN'
+                spot_direction = 1
+                futures_direction = -1
+            elif spot_change < -min_change_threshold and futures_change > min_change_threshold:
+                # Spot DOWN, Futures UP = Short Setup potential
+                pattern = 'SPOT_DOWN_FUTURES_UP'
+                spot_direction = -1
+                futures_direction = 1
+            elif spot_change > 0 and futures_change > 0:
+                # Both UP - not divergence but track who's leading
+                if spot_change > futures_change * 1.5:
+                    pattern = 'SPOT_LEADING_UP'
+                    spot_direction = 1
+                    futures_direction = 0.5  # Weak up
+                elif futures_change > spot_change * 1.5:
+                    pattern = 'FUTURES_LEADING_UP'
+                    spot_direction = 0.5  # Weak up
+                    futures_direction = 1
+                else:
+                    pattern = 'BOTH_UP_BALANCED'
+                    spot_direction = 1
+                    futures_direction = 1
+            elif spot_change < 0 and futures_change < 0:
+                # Both DOWN - not divergence but track who's leading
+                if abs(spot_change) > abs(futures_change) * 1.5:
+                    pattern = 'SPOT_LEADING_DOWN'
+                    spot_direction = -1
+                    futures_direction = -0.5  # Weak down
+                elif abs(futures_change) > abs(spot_change) * 1.5:
+                    pattern = 'FUTURES_LEADING_DOWN'
+                    spot_direction = -0.5  # Weak down
+                    futures_direction = -1
+                else:
+                    pattern = 'BOTH_DOWN_BALANCED'
+                    spot_direction = -1
+                    futures_direction = -1
+        
+        # Calculate z-score for additional context
+        if len(cvd_divergence) > lookback:
+            recent_div = cvd_divergence.iloc[-lookback:]
+            div_mean = recent_div.mean()
+            div_std = recent_div.std()
+            z_score = (current_divergence - div_mean) / div_std if div_std > 0 else 0
+        else:
+            z_score = 0
         
         return {
             'pattern': pattern,
@@ -203,7 +291,7 @@ class DivergenceDetection:
             'futures_change': futures_change,
             'divergence_strength': abs(current_divergence),
             'recent_divergence': current_divergence,
-            'significance': divergence_analysis['significance'],
+            'significance': min(abs(z_score) / 2.0, 1.0) if abs(z_score) > 0 else 0.5,  # More lenient
             'z_score': z_score
         }
     
@@ -248,14 +336,14 @@ class DivergenceDetection:
         else:
             z_score = 0
         
-        # Adaptive significance threshold
-        base_threshold = adaptive_significance_threshold(cvd_divergence, 2.0)
+        # FIXED: More lenient significance thresholds
+        base_threshold = 1.5  # Reduced from adaptive threshold
         
-        # Multiple significance criteria
+        # Multiple significance criteria (more lenient)
         is_significant = (
             multiplier >= base_threshold or 
-            current_divergence > recent_max * 1.5 or
-            abs(z_score) > 2.0  # Statistical significance
+            current_divergence > recent_max * 1.2 or  # Reduced from 1.5
+            abs(z_score) > 1.0  # Reduced from 2.0
         )
         
         return {
@@ -286,15 +374,15 @@ class DivergenceDetection:
         spot_direction = cvd_patterns.get('spot_direction', 0)
         futures_direction = cvd_patterns.get('futures_direction', 0)
         
-        # PRIMARY: Exact CVD divergence patterns (existing logic)
+        # PRIMARY: TRUE DIVERGENCE PATTERNS (spot and futures opposite)
+        # Long Setup: Price stable/rising + Spot UP + Futures DOWN
         if (movement in ['STABLE', 'RISING'] and 
-            cvd_pattern == 'SPOT_LEADING_UP' and
-            market_bias != 'BEARISH'):
+            cvd_pattern == 'SPOT_UP_FUTURES_DOWN'):
             return 'LONG_SETUP'
             
+        # Short Setup: Price stable/falling + Spot DOWN + Futures UP
         elif (movement in ['STABLE', 'FALLING'] and 
-              cvd_pattern == 'FUTURES_LEADING_UP' and
-              market_bias != 'BULLISH'):
+              cvd_pattern == 'SPOT_DOWN_FUTURES_UP'):
             return 'SHORT_SETUP'
         
         # SECONDARY: CVD alignment patterns (less restrictive)

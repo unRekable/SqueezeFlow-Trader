@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 
 from services.strategy_runner import StrategyRunner
-from services.config.service_config import ConfigManager, ServiceConfig
+from services.config.unified_config import ConfigManager, ServiceConfig
 from services.signal_validator import ValidationResult
 from tests.conftest import (
     PERFORMANCE_BENCHMARKS, wait_for_condition, create_test_signal,
