@@ -88,3 +88,36 @@ services:
       - aggr-influx
     networks:
       - aggr_backend
+
+  # Open Interest Tracker - ADDED FOR SERVER
+  oi-tracker:
+    container_name: squeezeflow-oi-tracker
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.oi-tracker
+    restart: unless-stopped
+    environment:
+      - INFLUX_HOST=aggr-influx
+      - INFLUX_PORT=8086
+      - INFLUX_DATABASE=significant_trades
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # OI data uses same retention policy as trades
+      - OI_RETENTION_POLICY=aggr_1s
+      - OI_MEASUREMENT=oi_1s
+    depends_on:
+      - aggr-influx
+      - redis
+    networks:
+      - aggr_backend
+
+  # Redis for OI Tracker - ADDED FOR SERVER
+  redis:
+    container_name: squeezeflow-redis-server
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    networks:
+      - aggr_backend
