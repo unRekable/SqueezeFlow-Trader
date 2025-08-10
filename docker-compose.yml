@@ -99,7 +99,7 @@ services:
     volumes:
       - ./aggr-server/data/chronograf:/var/lib/chronograf
     ports:
-      - 'w:8888'
+      - '8888:8888'
     environment:
       - 'INFLUXDB_URL=http://aggr-influx:8086'
     depends_on:
