@@ -67,13 +67,46 @@ DERIBIT:BTC-PERPETUAL   →  BTC (Deribit)
 ### InfluxDB Schema
 ```sql
 -- Measurement: open_interest
--- Tags: exchange, symbol, base_symbol, market
--- Fields: open_interest, open_interest_usd
+-- Tags: exchange, symbol, base_symbol, aggregate_type
+-- Fields: open_interest, pair_count/exchange_count
 -- Time: UTC timestamp
 
+-- Individual exchange records
 SELECT * FROM open_interest 
-WHERE time > now() - 1h 
+WHERE aggregate_type='individual' AND time > now() - 1h 
 ORDER BY time DESC;
+
+-- Futures aggregate (top 3 exchanges)
+SELECT * FROM open_interest 
+WHERE aggregate_type='futures_aggregate' AND time > now() - 1h
+ORDER BY time DESC;
+
+-- Total aggregate (all 4 exchanges)  
+SELECT * FROM open_interest
+WHERE aggregate_type='total_aggregate' AND time > now() - 1h
+ORDER BY time DESC;
+```
+
+### Data Storage Types
+
+#### **1. Individual Exchange Records**
+```
+exchange='BINANCE', symbol='BTC', aggregate_type='individual'
+exchange='BYBIT', symbol='BTC', aggregate_type='individual'  
+exchange='OKX', symbol='BTC', aggregate_type='individual'
+exchange='DERIBIT', symbol='BTC', aggregate_type='individual'
+```
+
+#### **2. Futures Aggregate (Top 3 Combined)**
+```
+exchange='FUTURES_AGG', symbol='BTC', aggregate_type='futures_aggregate'
+# Contains: BINANCE + BYBIT + OKX combined OI
+```
+
+#### **3. Total Aggregate (All 4 Combined)**
+```
+exchange='TOTAL_AGG', symbol='BTC', aggregate_type='total_aggregate'  
+# Contains: BINANCE + BYBIT + OKX + DERIBIT combined OI
 ```
 
 ### Retention Policy
@@ -103,11 +136,20 @@ docker-compose -f docker-compose.server.yml logs -f oi-tracker
 # View discovered symbols
 docker logs squeezeflow-oi-tracker | grep 'Discovered.*symbols'
 
-# Check OI data collection
-docker exec aggr-influx influx -execute "SELECT * FROM open_interest ORDER BY time DESC LIMIT 5" -database significant_trades
+# Check individual exchange OI data
+docker exec aggr-influx influx -execute "SELECT * FROM open_interest WHERE aggregate_type='individual' ORDER BY time DESC LIMIT 10" -database significant_trades
 
-# Monitor collection by exchange
-docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM open_interest WHERE time > now() - 1h GROUP BY exchange" -database significant_trades
+# Check futures aggregate OI (top 3 exchanges)
+docker exec aggr-influx influx -execute "SELECT * FROM open_interest WHERE aggregate_type='futures_aggregate' ORDER BY time DESC LIMIT 5" -database significant_trades
+
+# Check total aggregate OI (all 4 exchanges)
+docker exec aggr-influx influx -execute "SELECT * FROM open_interest WHERE aggregate_type='total_aggregate' ORDER BY time DESC LIMIT 5" -database significant_trades
+
+# Monitor collection by exchange and type
+docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM open_interest WHERE time > now() - 1h GROUP BY exchange, aggregate_type" -database significant_trades
+
+# Compare BTC OI across all aggregation types
+docker exec aggr-influx influx -execute "SELECT exchange, aggregate_type, open_interest FROM open_interest WHERE symbol='BTC' AND time > now() - 10m ORDER BY time DESC" -database significant_trades
 ```
 
 ## 🔧 Troubleshooting

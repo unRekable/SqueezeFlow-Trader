@@ -235,6 +235,31 @@ class OITracker:
         symbol_part = market.split(':')[-1]
         return symbol_part.split('-')[0]
     
+    def _extract_base_symbol(self, symbol: str) -> str:
+        """Extract base symbol from trading pair (BTCUSDT -> BTC)"""
+        symbol = symbol.upper()
+        
+        # Known quote currencies to remove
+        quote_currencies = ['USDT', 'USDC', 'FDUSD', 'USD', 'BUSD', 'DAI', 'EUR']
+        
+        # Try removing each quote currency
+        for quote in quote_currencies:
+            if symbol.endswith(quote):
+                base = symbol[:-len(quote)]
+                if base:  # Make sure we have a base symbol left
+                    return base
+        
+        # Special cases
+        if 'BTC' in symbol:
+            return 'BTC'
+        elif 'ETH' in symbol:
+            return 'ETH'
+        elif 'XBT' in symbol:  # Kraken uses XBT
+            return 'BTC'
+        
+        # Fallback: return first 3-4 characters
+        return symbol[:3] if len(symbol) >= 3 else symbol
+    
     async def should_collect_from_exchange(self, exchange: str) -> bool:
         """Check if enough time has passed since last collection for this exchange"""
         current_time = time.time()
@@ -469,10 +494,7 @@ class OITracker:
                 'exchange': 'BINANCE',
                 'symbol': symbol,
                 'timestamp': datetime.now(timezone.utc),
-                'open_interest': float(data.get('openInterest', 0)),
-                'open_interest_value': float(data.get('openInterest', 0)) * float(data.get('markPrice', 0)),
-                'funding_rate': None,  # Would need separate API call
-                'metadata': {'raw_data': data}
+                'open_interest': float(data.get('openInterest', 0))
             }
         except Exception as e:
             self.logger.error(f"Error parsing Binance OI data: {e}")
@@ -545,41 +567,156 @@ class OITracker:
         return oi_data
         
     async def store_oi_data(self, oi_data: List[Dict]) -> bool:
-        """Store OI data in InfluxDB"""
+        """Store OI data in InfluxDB with individual, futures aggregate, and total aggregate records"""
         if not oi_data:
             return True
             
         try:
-            # Prepare data for InfluxDB insertion
-            influx_points = []
+            # Step 1: Aggregate OI by base symbol and exchange (individual records)
+            individual_aggregates = {}
             
             for oi in oi_data:
+                # Extract base symbol (BTCUSDT -> BTC)
+                base_symbol = self._extract_base_symbol(oi['symbol'])
+                exchange = oi['exchange']
+                
+                # Create aggregate key
+                key = f"{exchange}:{base_symbol}"
+                
+                if key not in individual_aggregates:
+                    individual_aggregates[key] = {
+                        'exchange': exchange,
+                        'base_symbol': base_symbol,
+                        'original_symbol': oi['symbol'],  # Keep one original for reference
+                        'market': oi.get('market', ''),
+                        'timestamp': oi['timestamp'],
+                        'total_open_interest': 0.0,
+                        'pair_count': 0
+                    }
+                
+                # Aggregate values
+                individual_aggregates[key]['total_open_interest'] += float(oi.get('open_interest', 0))
+                individual_aggregates[key]['pair_count'] += 1
+            
+            # Step 2: Create cross-exchange aggregates by base symbol
+            futures_exchanges = ['BINANCE', 'BYBIT', 'OKX']  # Top 3 futures exchanges
+            all_exchanges = ['BINANCE', 'BYBIT', 'OKX', 'DERIBIT']  # All 4 exchanges
+            
+            symbol_aggregates = {}  # Track aggregates by base symbol
+            
+            for key, individual in individual_aggregates.items():
+                base_symbol = individual['base_symbol']
+                exchange = individual['exchange']
+                oi_value = individual['total_open_interest']
+                
+                # Initialize base symbol tracking
+                if base_symbol not in symbol_aggregates:
+                    symbol_aggregates[base_symbol] = {
+                        'futures_total': 0.0,  # Top 3 futures exchanges
+                        'total_all': 0.0,      # All 4 exchanges  
+                        'futures_exchanges': [],
+                        'all_exchanges': [],
+                        'timestamp': individual['timestamp']
+                    }
+                
+                # Add to futures aggregate (top 3)
+                if exchange in futures_exchanges:
+                    symbol_aggregates[base_symbol]['futures_total'] += oi_value
+                    symbol_aggregates[base_symbol]['futures_exchanges'].append(f"{exchange}:{oi_value:,.0f}")
+                
+                # Add to total aggregate (all 4)
+                if exchange in all_exchanges:
+                    symbol_aggregates[base_symbol]['total_all'] += oi_value
+                    symbol_aggregates[base_symbol]['all_exchanges'].append(f"{exchange}:{oi_value:,.0f}")
+            
+            # Step 3: Prepare all InfluxDB points
+            influx_points = []
+            
+            # Individual exchange records
+            for key, aggregate in individual_aggregates.items():
                 point = {
                     'tags': {
-                        'exchange': oi['exchange'],
-                        'symbol': oi['symbol']
+                        'exchange': aggregate['exchange'],
+                        'symbol': aggregate['base_symbol'],  # Store as BTC, ETH, etc.
+                        'base_symbol': aggregate['base_symbol'],
+                        'original_symbol': aggregate['original_symbol'],
+                        'market': aggregate['market'],
+                        'aggregate_type': 'individual'
                     },
                     'fields': {
-                        'open_interest': float(oi.get('open_interest', 0)),
-                        'open_interest_usd': float(oi.get('open_interest_value', 0)) if oi.get('open_interest_value') else 0.0,
-                        'funding_rate': float(oi.get('funding_rate', 0)) if oi.get('funding_rate') else 0.0
+                        'open_interest': aggregate['total_open_interest'],
+                        'pair_count': aggregate['pair_count']
                     },
-                    'timestamp': oi['timestamp']
+                    'timestamp': aggregate['timestamp']
                 }
                 influx_points.append(point)
             
+            # Futures aggregate records (top 3 exchanges combined)
+            for base_symbol, agg_data in symbol_aggregates.items():
+                if agg_data['futures_total'] > 0:  # Only create if we have futures data
+                    point = {
+                        'tags': {
+                            'exchange': 'FUTURES_AGG',
+                            'symbol': base_symbol,
+                            'base_symbol': base_symbol,
+                            'original_symbol': 'AGGREGATED',
+                            'market': 'FUTURES_COMBINED',
+                            'aggregate_type': 'futures_aggregate'
+                        },
+                        'fields': {
+                            'open_interest': agg_data['futures_total'],
+                            'exchange_count': len(agg_data['futures_exchanges'])
+                        },
+                        'timestamp': agg_data['timestamp']
+                    }
+                    influx_points.append(point)
+            
+            # Total aggregate records (all 4 exchanges combined)  
+            for base_symbol, agg_data in symbol_aggregates.items():
+                if agg_data['total_all'] > 0:  # Only create if we have data
+                    point = {
+                        'tags': {
+                            'exchange': 'TOTAL_AGG',
+                            'symbol': base_symbol,
+                            'base_symbol': base_symbol,
+                            'original_symbol': 'AGGREGATED',
+                            'market': 'ALL_COMBINED',
+                            'aggregate_type': 'total_aggregate'
+                        },
+                        'fields': {
+                            'open_interest': agg_data['total_all'],
+                            'exchange_count': len(agg_data['all_exchanges'])
+                        },
+                        'timestamp': agg_data['timestamp']
+                    }
+                    influx_points.append(point)
+            
             # Write to InfluxDB
-            success = self.influx_handler.write_trading_data('open_interest', influx_points)
+            measurement = os.getenv('OI_MEASUREMENT', 'open_interest')
+            success = self.influx_handler.write_trading_data(measurement, influx_points)
             
             if success:
-                self.logger.info(f"Stored {len(influx_points)} OI records in InfluxDB")
+                individual_count = len(individual_aggregates)
+                futures_agg_count = len([s for s in symbol_aggregates.values() if s['futures_total'] > 0])
+                total_agg_count = len([s for s in symbol_aggregates.values() if s['total_all'] > 0])
+                
+                self.logger.info(f"✅ Stored {len(influx_points)} OI records:")
+                self.logger.info(f"   📊 {individual_count} individual exchange records")
+                self.logger.info(f"   🔥 {futures_agg_count} futures aggregate records (top 3 exchanges)")
+                self.logger.info(f"   📈 {total_agg_count} total aggregate records (all 4 exchanges)")
+                
+                # Log aggregate details
+                for base_symbol, agg_data in symbol_aggregates.items():
+                    if agg_data['total_all'] > 0:
+                        self.logger.debug(f"   {base_symbol}: Futures={agg_data['futures_total']:,.0f}, Total={agg_data['total_all']:,.0f}")
+                
                 return True
             else:
-                self.logger.error("Failed to store OI data in InfluxDB")
+                self.logger.error("❌ Failed to store OI data in InfluxDB")
                 return False
             
         except Exception as e:
-            self.logger.error(f"Error storing OI data in InfluxDB: {e}")
+            self.logger.error(f"Error storing OI data: {e}")
             return False
             
     async def cache_oi_data(self, oi_data: List[Dict]):

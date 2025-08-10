@@ -75,11 +75,42 @@ TZ: UTC  # All services use UTC
 - **FreqTrade:** Connected and receiving signals
 - **Redis:** Caching and pub/sub working
 
+## Open Interest (OI) Data Structure
+
+### OI Collection & Aggregation
+- **Exchanges:** 4 major exchanges (BINANCE_FUTURES, BYBIT, OKX, DERIBIT)
+- **Base Symbols:** Aggregated by base asset (BTCUSDT+BTCUSDC → BTC)
+- **Storage:** 3 types of records per symbol
+
+### OI Query Patterns
+```bash
+# Individual exchange OI
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='BINANCE'
+
+# Top 3 futures combined (BINANCE + BYBIT + OKX)
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='FUTURES_AGG'
+
+# All exchanges combined (includes DERIBIT options)
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='TOTAL_AGG'
+
+# Compare all OI types for BTC
+SELECT exchange, open_interest FROM open_interest 
+WHERE symbol='BTC' AND time > now() - 1h ORDER BY time DESC
+```
+
+### OI Data Tags
+- **aggregate_type:** 'individual', 'futures_aggregate', 'total_aggregate'
+- **exchange:** Exchange name or 'FUTURES_AGG'/'TOTAL_AGG'
+- **symbol:** Base symbol (BTC, ETH, etc.)
+
 ## Commands That Work
 
 ```bash
 # Check data availability
 docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM \"aggr_1s\".\"trades_1s\" WHERE time > now() - 24h" -database significant_trades
+
+# Check OI data availability
+docker exec aggr-influx influx -execute "SELECT * FROM open_interest WHERE time > now() - 1h ORDER BY time DESC LIMIT 10" -database significant_trades
 
 # Run backtest (fast - ~4 seconds)
 python3 backtest/engine.py --symbol BTC --start-date 2025-08-09 --end-date 2025-08-09
