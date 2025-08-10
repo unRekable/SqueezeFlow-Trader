@@ -17,7 +17,7 @@ echo "======================================"
 
 # Check if continuous query exists
 echo -e "${YELLOW}1. Checking Continuous Query Status...${NC}"
-cq_status=$(docker exec aggr-influx influx -execute "SHOW CONTINUOUS QUERIES ON significant_trades" -database significant_trades 2>/dev/null)
+cq_status=$(docker exec aggr-influx influx -database significant_trades -execute "SHOW CONTINUOUS QUERIES" 2>/dev/null)
 
 if echo "$cq_status" | grep -q "cq_trades_1m"; then
     echo -e "${GREEN}✅ Continuous Query 'cq_trades_1m' exists${NC}"

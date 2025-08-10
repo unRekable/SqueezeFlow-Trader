@@ -28,16 +28,16 @@ influx_exec "CREATE RETENTION POLICY rp_1m ON significant_trades DURATION INF RE
 
 echo -e "${YELLOW}2. Creating continuous query for 1-minute OHLCV aggregation...${NC}"
 
-# Drop existing CQ if it exists
-influx_exec "DROP CONTINUOUS QUERY cq_trades_1m ON significant_trades" || true
+# Drop existing CQ if it exists (correct syntax - no ON database_name)
+echo -e "${YELLOW}Dropping existing continuous query if exists...${NC}"
+docker exec aggr-influx influx -database significant_trades -execute "DROP CONTINUOUS QUERY cq_trades_1m" || true
 
-# Create 1-minute continuous query (single line format for InfluxDB)
-CQ_QUERY='CREATE CONTINUOUS QUERY cq_trades_1m ON significant_trades BEGIN SELECT FIRST(open) AS open, MAX(high) AS high, MIN(low) AS low, LAST(close) AS close, SUM(vbuy) AS vbuy, SUM(vsell) AS vsell, SUM(cbuy) AS cbuy, SUM(csell) AS csell, SUM(lbuy) AS lbuy, SUM(lsell) AS lsell INTO "rp_1m"."trades_1m" FROM "aggr_1s"."trades_1s" GROUP BY time(1m), market END'
-
-influx_exec "$CQ_QUERY"
+# Create 1-minute continuous query (correct InfluxDB v1 syntax)
+echo -e "${YELLOW}Creating continuous query via direct influx command...${NC}"
+docker exec aggr-influx influx -database significant_trades -execute "CREATE CONTINUOUS QUERY cq_trades_1m ON significant_trades BEGIN SELECT FIRST(open) AS open, MAX(high) AS high, MIN(low) AS low, LAST(close) AS close, SUM(vbuy) AS vbuy, SUM(vsell) AS vsell, SUM(cbuy) AS cbuy, SUM(csell) AS csell, SUM(lbuy) AS lbuy, SUM(lsell) AS lsell INTO \"rp_1m\".\"trades_1m\" FROM \"aggr_1s\".\"trades_1s\" GROUP BY time(1m), market END"
 
 echo -e "${YELLOW}3. Verifying continuous query...${NC}"
-influx_exec "SHOW CONTINUOUS QUERIES ON significant_trades"
+docker exec aggr-influx influx -database significant_trades -execute "SHOW CONTINUOUS QUERIES"
 
 echo -e "${YELLOW}4. Checking if data will be aggregated (may take up to 1 minute)...${NC}"
 sleep 5
