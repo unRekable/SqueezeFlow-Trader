@@ -168,6 +168,45 @@ class SymbolDiscovery:
             return symbol_match.group(1)
             
         return None
+    
+    def _normalize_symbols(self, symbol_markets: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """
+        Normalize and deduplicate symbols to their canonical base form
+        
+        Examples:
+            BTC, BTCUSDT → BTC
+            ETH, ETHUSDT, ETH/, CETH → ETH
+        """
+        normalized = {}
+        
+        # Define canonical symbol mappings
+        canonical_symbols = {
+            # Bitcoin variants
+            'BTC': 'BTC', 'BTCUSDT': 'BTC', 'BTCUSDC': 'BTC', 'BTCUSD': 'BTC',
+            'XBT': 'BTC', 'XBTUSDT': 'BTC', 'XBTUSD': 'BTC',
+            
+            # Ethereum variants  
+            'ETH': 'ETH', 'ETHUSDT': 'ETH', 'ETHUSDC': 'ETH', 'ETHUSD': 'ETH',
+            'ETH/': 'ETH', 'CETH': 'ETH',
+            
+            # Other common variants
+            'TONCOIN': 'TON',  # HITBTC uses TONCOIN
+        }
+        
+        for symbol, markets_list in symbol_markets.items():
+            # Get canonical form or use original if not in mapping
+            canonical = canonical_symbols.get(symbol, symbol)
+            
+            # Consolidate markets under canonical symbol
+            if canonical not in normalized:
+                normalized[canonical] = []
+            normalized[canonical].extend(markets_list)
+        
+        # Remove duplicates from market lists
+        for symbol in normalized:
+            normalized[symbol] = list(set(normalized[symbol]))
+            
+        return normalized
         
     def _validate_symbol_match(self, market_clean: str, symbol: str) -> bool:
         """Validate that the symbol match is correct and not a false positive"""
@@ -249,9 +288,13 @@ class SymbolDiscovery:
             
             logger.info(f"🎯 Extracted {len(symbol_markets)} potential symbols: {list(symbol_markets.keys())}")
             
-            # Validate data quality for each symbol
+            # Normalize and deduplicate symbols
+            normalized_symbol_markets = self._normalize_symbols(symbol_markets)
+            logger.info(f"🧹 Normalized to {len(normalized_symbol_markets)} unique symbols: {list(normalized_symbol_markets.keys())}")
+            
+            # Validate data quality for each normalized symbol
             active_symbols = []
-            for symbol, markets_list in symbol_markets.items():
+            for symbol, markets_list in normalized_symbol_markets.items():
                 data_quality = self._check_data_quality(markets_list, hours_lookback)
                 
                 if data_quality >= min_data_points:
