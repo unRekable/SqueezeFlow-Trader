@@ -71,6 +71,16 @@ curl http://localhost:8086/ping
 docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM \"aggr_1s\".\"trades_1s\" WHERE time > now() - 10m" -database significant_trades
 ```
 
+### 5. Setup 1-Minute Backup Aggregation (Recommended)
+
+```bash
+# Create continuous queries for 1s -> 1m aggregation
+./scripts/setup_1m_continuous_queries.sh
+
+# Monitor the aggregation process
+./scripts/monitor_1m_aggregation.sh
+```
+
 ### 5. Configure Firewall (if needed)
 
 ```bash
