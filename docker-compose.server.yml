@@ -89,7 +89,7 @@ services:
     networks:
       - aggr_backend
 
-  # Open Interest Tracker - ADDED FOR SERVER
+  # Open Interest Tracker - ADDED FOR SERVER  
   oi-tracker:
     container_name: squeezeflow-oi-tracker
     build:
@@ -100,24 +100,26 @@ services:
       - INFLUX_HOST=aggr-influx
       - INFLUX_PORT=8086
       - INFLUX_DATABASE=significant_trades
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      # OI data uses same retention policy as trades
-      - OI_RETENTION_POLICY=aggr_1s
-      - OI_MEASUREMENT=oi_1s
+      # Enhanced OI Tracker Configuration
+      - OI_MEASUREMENT=open_interest
+      - OI_COLLECTION_INTERVAL=60         # Master cycle: 60 seconds
+      - OI_MIN_DATA_POINTS=1000          # Require 1000+ data points for symbol inclusion
+      - OI_LOOKBACK_HOURS=24             # Look back 24 hours for active symbols
+      # Exchange-specific intervals (handled internally)
+      - BINANCE_OI_INTERVAL=900          # 15 minutes (native frequency)
+      - BYBIT_OI_INTERVAL=60             # 1 minute (real-time capable)  
+      - OKX_OI_INTERVAL=60               # 1 minute
+      - DERIBIT_OI_INTERVAL=60           # 1 minute
     depends_on:
       - aggr-influx
-      - redis
     networks:
       - aggr_backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1' 
+          memory: 128M
 
-  # Redis for OI Tracker - ADDED FOR SERVER
-  redis:
-    container_name: squeezeflow-redis-server
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
-    networks:
-      - aggr_backend

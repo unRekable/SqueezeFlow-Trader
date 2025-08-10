@@ -32,10 +32,9 @@ echo -e "${YELLOW}3. Building custom images...${NC}"
 docker-compose -f docker-compose.server.yml build
 
 echo -e "${YELLOW}4. Starting server services...${NC}"
-echo "  • InfluxDB (time-series database)"
+echo "  • InfluxDB (time-series database)"  
 echo "  • aggr-server (market data collection)"
-echo "  • OI Tracker (open interest tracking)"
-echo "  • Redis (caching for OI tracker)"
+echo "  • OI Tracker (open interest tracking with dynamic symbol discovery)"
 echo "  • Chronograf (InfluxDB admin UI)"
 
 docker-compose -f docker-compose.server.yml up -d
@@ -86,14 +85,27 @@ echo -e "${YELLOW}9. Monitoring initial data collection...${NC}"
 echo "Waiting 30 seconds for data to start flowing..."
 sleep 30
 
-# Check if data is being collected
+# Check if trades data is being collected
 data_check=$(docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM \"aggr_1s\".\"trades_1s\" WHERE time > now() - 2m" -database significant_trades 2>/dev/null || echo "0")
 
 if echo "$data_check" | grep -q "[1-9]"; then
     count=$(echo "$data_check" | grep -o '[0-9]\+' | head -1)
-    echo -e "${GREEN}🎉 Data collection started! $count data points in last 2 minutes${NC}"
+    echo -e "${GREEN}🎉 Trades data collection started! $count data points in last 2 minutes${NC}"
 else
-    echo -e "${YELLOW}⏳ Data collection starting (may take 1-2 minutes)${NC}"
+    echo -e "${YELLOW}⏳ Trades data collection starting (may take 1-2 minutes)${NC}"
+fi
+
+# Check OI data collection (starts after symbol discovery)
+echo -e "${YELLOW}10. Checking OI tracker initialization...${NC}"
+sleep 30
+
+oi_check=$(docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM \"open_interest\" WHERE time > now() - 5m" -database significant_trades 2>/dev/null || echo "0")
+
+if echo "$oi_check" | grep -q "[1-9]"; then
+    count=$(echo "$oi_check" | grep -o '[0-9]\+' | head -1)
+    echo -e "${GREEN}🎉 OI data collection started! $count OI records in last 5 minutes${NC}"
+else
+    echo -e "${YELLOW}⏳ OI tracker discovering symbols and starting collection...${NC}"
 fi
 
 echo ""
@@ -111,9 +123,16 @@ echo "  docker-compose -f docker-compose.server.yml ps"
 echo ""
 echo "  # View logs"
 echo "  docker-compose -f docker-compose.server.yml logs -f"
+echo "  docker-compose -f docker-compose.server.yml logs -f oi-tracker"
 echo ""
 echo "  # Monitor data collection"
 echo "  ./scripts/monitor_1m_aggregation.sh"
+echo ""
+echo "  # Check OI data collection"
+echo '  docker exec aggr-influx influx -execute "SELECT * FROM open_interest ORDER BY time DESC LIMIT 5" -database significant_trades'
+echo ""
+echo "  # View discovered symbols for OI"
+echo "  docker logs squeezeflow-oi-tracker | grep 'Discovered.*symbols'"
 echo ""
 echo "  # Stop all services"
 echo "  docker-compose -f docker-compose.server.yml down"

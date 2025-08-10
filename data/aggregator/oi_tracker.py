@@ -104,38 +104,144 @@ class OITracker:
     # Database URL parsing no longer needed with InfluxDB
         
     def setup_exchanges(self):
-        """Setup exchange configurations"""
-        # CONFIGURABLE: Focus on BTC + ETH only with correct symbol formats per exchange
+        """Setup exchange configurations with optimal intervals"""
         self.exchanges = {
             'binance': {
                 'name': 'BINANCE',
                 'url': 'https://fapi.binance.com/fapi/v1/openInterest',
-                'symbols': ['BTCUSDT', 'ETHUSDT'],  # Binance futures format
-                'rate_limit': 1200,  # requests per minute
-                'parser': self._parse_binance_oi
+                'interval': 900,  # 15 minutes (native frequency)
+                'rate_limit': 2400,  # requests per minute
+                'parser': self._parse_binance_oi,
+                'symbol_format': self._format_binance_symbol
             },
             'bybit': {
-                'name': 'BYBIT',
-                'url': 'https://api.bybit.com/v5/market/open-interest',  # Updated API endpoint
-                'symbols': ['BTCUSDT', 'ETHUSDT'],  # Bybit linear format
+                'name': 'BYBIT', 
+                'url': 'https://api.bybit.com/v5/market/open-interest',
+                'interval': 60,   # 1 minute (real-time capable)
                 'rate_limit': 600,
-                'parser': self._parse_bybit_oi
+                'parser': self._parse_bybit_oi,
+                'symbol_format': self._format_bybit_symbol
             },
             'okx': {
                 'name': 'OKX',
                 'url': 'https://www.okx.com/api/v5/public/open-interest',
-                'symbols': ['BTC-USDT-SWAP', 'ETH-USDT-SWAP'],  # OKX swap format
+                'interval': 60,   # 1 minute
                 'rate_limit': 600,
-                'parser': self._parse_okx_oi
+                'parser': self._parse_okx_oi,
+                'symbol_format': self._format_okx_symbol
             },
             'deribit': {
                 'name': 'DERIBIT',
                 'url': 'https://www.deribit.com/api/v2/public/get_book_summary_by_currency',
-                'symbols': ['BTC', 'ETH'],  # Deribit currency format
+                'interval': 60,   # 1 minute via WebSocket eventually
                 'rate_limit': 300,
-                'parser': self._parse_deribit_oi
+                'parser': self._parse_deribit_oi,
+                'symbol_format': self._format_deribit_symbol
             }
         }
+        
+        # Track last collection time per exchange
+        self.last_collection = {exchange: 0 for exchange in self.exchanges}
+        
+        # Setup market discovery
+        self.setup_market_discovery()
+    
+    def setup_market_discovery(self):
+        """Setup market discovery services"""
+        try:
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from data.loaders.market_discovery import MarketDiscovery
+            from data.loaders.symbol_discovery import SymbolDiscovery
+            
+            self.market_discovery = MarketDiscovery()
+            self.symbol_discovery = SymbolDiscovery()
+            self.logger.info("✅ Market discovery services initialized")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize market discovery: {e}")
+            # Fallback to manual symbol list
+            self.market_discovery = None
+            self.symbol_discovery = None
+    
+    def discover_active_futures_symbols(self) -> Dict[str, List[str]]:
+        """
+        Discover active futures symbols from database using market discovery
+        Returns dict mapping base symbols to their futures markets
+        """
+        futures_symbols = {}
+        
+        if not self.market_discovery or not self.symbol_discovery:
+            # Fallback to basic BTC/ETH
+            self.logger.warning("Market discovery not available, using fallback symbols")
+            return {
+                'BTC': ['BINANCE_FUTURES:btcusdt', 'BYBIT:BTCUSDT', 'OKEX:BTC-USDT-SWAP', 'DERIBIT:BTC-PERPETUAL'],
+                'ETH': ['BINANCE_FUTURES:ethusdt', 'BYBIT:ETHUSDT', 'OKEX:ETH-USDT-SWAP', 'DERIBIT:ETH-PERPETUAL']
+            }
+        
+        try:
+            # Discover active symbols from database
+            active_symbols = self.symbol_discovery.discover_symbols_from_database(
+                min_data_points=int(os.getenv('OI_MIN_DATA_POINTS', 1000)),
+                hours_lookback=int(os.getenv('OI_LOOKBACK_HOURS', 24))
+            )
+            
+            self.logger.info(f"🔍 Discovered {len(active_symbols)} active symbols from database")
+            
+            # For each symbol, get futures markets only
+            for symbol in active_symbols:
+                markets_by_type = self.market_discovery.get_markets_by_type(symbol)
+                perp_markets = markets_by_type.get('perp', [])
+                
+                if perp_markets:
+                    # Filter for exchanges we support OI collection from
+                    supported_futures = []
+                    for market in perp_markets:
+                        exchange_name = market.split(':')[0].upper()
+                        if any(exchange_name.startswith(ex.upper()) for ex in self.exchanges.keys()):
+                            supported_futures.append(market)
+                    
+                    if supported_futures:
+                        futures_symbols[symbol] = supported_futures
+                        self.logger.debug(f"📈 {symbol}: {len(supported_futures)} futures markets")
+            
+            self.logger.info(f"✅ Found {len(futures_symbols)} symbols with futures markets for OI collection")
+            return futures_symbols
+            
+        except Exception as e:
+            self.logger.error(f"Error discovering futures symbols: {e}")
+            # Fallback to basic symbols
+            return {
+                'BTC': ['BINANCE_FUTURES:btcusdt'],
+                'ETH': ['BINANCE_FUTURES:ethusdt']
+            }
+    
+    def _format_binance_symbol(self, market: str) -> str:
+        """Convert market format to Binance API format"""
+        # BINANCE_FUTURES:btcusdt -> BTCUSDT
+        return market.split(':')[-1].upper()
+    
+    def _format_bybit_symbol(self, market: str) -> str:
+        """Convert market format to Bybit API format"""
+        # BYBIT:btcusdt -> BTCUSDT
+        return market.split(':')[-1].upper()
+    
+    def _format_okx_symbol(self, market: str) -> str:
+        """Convert market format to OKX API format"""
+        # OKEX:BTC-USDT-SWAP -> BTC-USDT-SWAP
+        return market.split(':')[-1]
+    
+    def _format_deribit_symbol(self, market: str) -> str:
+        """Convert market format to Deribit API format"""
+        # DERIBIT:BTC-PERPETUAL -> BTC
+        symbol_part = market.split(':')[-1]
+        return symbol_part.split('-')[0]
+    
+    async def should_collect_from_exchange(self, exchange: str) -> bool:
+        """Check if enough time has passed since last collection for this exchange"""
+        current_time = time.time()
+        last_time = self.last_collection[exchange]
+        interval = self.exchanges[exchange]['interval']
+        
+        return (current_time - last_time) >= interval
         
     async def test_influxdb_connection(self) -> bool:
         """Test InfluxDB connection"""
@@ -144,6 +250,104 @@ class OITracker:
         except Exception as e:
             self.logger.error(f"InfluxDB connection test failed: {e}")
             return False
+    
+    async def fetch_oi_data_for_exchange(self, session: aiohttp.ClientSession, 
+                                       exchange: str, symbols_dict: Dict[str, List[str]]) -> List[Dict]:
+        """Fetch OI data from a specific exchange for relevant symbols"""
+        
+        config = self.exchanges[exchange]
+        oi_data = []
+        
+        # Find markets for this exchange
+        exchange_markets = []
+        for symbol, markets in symbols_dict.items():
+            for market in markets:
+                if market.upper().startswith(exchange.upper()) or (exchange == 'okx' and 'OKEX:' in market.upper()):
+                    exchange_markets.append((symbol, market))
+        
+        if not exchange_markets:
+            self.logger.debug(f"No markets found for {exchange}")
+            return []
+        
+        self.logger.info(f"🔄 Collecting OI from {exchange} for {len(exchange_markets)} markets")
+        
+        for base_symbol, market in exchange_markets:
+            try:
+                # Format symbol for this exchange's API
+                api_symbol = config['symbol_format'](market)
+                
+                if exchange == 'binance':
+                    data = await self._fetch_binance_oi_single(session, api_symbol)
+                elif exchange == 'bybit':
+                    data = await self._fetch_bybit_oi_single(session, api_symbol)
+                elif exchange == 'okx':
+                    data = await self._fetch_okx_oi_single(session, api_symbol)
+                elif exchange == 'deribit':
+                    data = await self._fetch_deribit_oi_single(session, api_symbol)
+                
+                if data:
+                    # Add base symbol info
+                    data['base_symbol'] = base_symbol
+                    data['market'] = market
+                    oi_data.append(data)
+                
+                # Rate limiting
+                await asyncio.sleep(60 / config['rate_limit'])
+                
+            except Exception as e:
+                self.logger.error(f"Error fetching OI from {exchange} for {market}: {e}")
+        
+        # Update last collection time
+        self.last_collection[exchange] = time.time()
+        return oi_data
+        
+    async def _fetch_binance_oi_single(self, session: aiohttp.ClientSession, symbol: str) -> Optional[Dict]:
+        """Fetch OI data from Binance for single symbol"""
+        try:
+            url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_binance_oi(symbol, data)
+        except Exception as e:
+            self.logger.error(f"Binance OI fetch error for {symbol}: {e}")
+        return None
+    
+    async def _fetch_bybit_oi_single(self, session: aiohttp.ClientSession, symbol: str) -> Optional[Dict]:
+        """Fetch OI data from Bybit for single symbol"""
+        try:
+            url = f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_bybit_oi(symbol, data)
+        except Exception as e:
+            self.logger.error(f"Bybit OI fetch error for {symbol}: {e}")
+        return None
+    
+    async def _fetch_okx_oi_single(self, session: aiohttp.ClientSession, symbol: str) -> Optional[Dict]:
+        """Fetch OI data from OKX for single symbol"""
+        try:
+            url = f"https://www.okx.com/api/v5/public/open-interest?instId={symbol}"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_okx_oi(symbol, data)
+        except Exception as e:
+            self.logger.error(f"OKX OI fetch error for {symbol}: {e}")
+        return None
+    
+    async def _fetch_deribit_oi_single(self, session: aiohttp.ClientSession, currency: str) -> Optional[Dict]:
+        """Fetch OI data from Deribit for single currency"""
+        try:
+            url = f"https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency={currency}&kind=future"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_deribit_oi(currency, data)
+        except Exception as e:
+            self.logger.error(f"Deribit OI fetch error for {currency}: {e}")
+        return None
             
     async def fetch_oi_data(self, session: aiohttp.ClientSession, exchange: str, config: Dict) -> Optional[List[Dict]]:
         """Fetch OI data from exchange"""
@@ -395,9 +599,18 @@ class OITracker:
             self.logger.error(f"Error caching OI data: {e}")
             
     async def collect_cycle(self):
-        """Single collection cycle for all exchanges"""
-        self.logger.info("Starting OI collection cycle")
+        """Enhanced collection cycle with dynamic symbol discovery"""
+        self.logger.info("🔄 Starting OI collection cycle...")
         start_time = time.time()
+        
+        # Discover active futures symbols from database
+        futures_symbols = self.discover_active_futures_symbols()
+        
+        if not futures_symbols:
+            self.logger.warning("No futures symbols discovered, skipping cycle")
+            return
+        
+        self.logger.info(f"📊 Collecting OI for {len(futures_symbols)} symbols across {len(self.exchanges)} exchanges")
         
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=30),
@@ -406,20 +619,22 @@ class OITracker:
             
             all_oi_data = []
             
-            # Collect from all exchanges
-            for exchange, config in self.exchanges.items():
-                self.logger.info(f"Collecting OI data from {exchange}")
-                oi_data = await self.fetch_oi_data(session, exchange, config)
-                if oi_data:
-                    all_oi_data.extend(oi_data)
-                    
-            # Store and cache data
+            # Collect from each exchange (respecting intervals)
+            for exchange in self.exchanges:
+                if await self.should_collect_from_exchange(exchange):
+                    oi_data = await self.fetch_oi_data_for_exchange(session, exchange, futures_symbols)
+                    if oi_data:
+                        all_oi_data.extend(oi_data)
+                        self.logger.info(f"📈 Collected {len(oi_data)} OI records from {exchange}")
+                else:
+                    self.logger.debug(f"⏳ Skipping {exchange} (interval not reached)")
+            
+            # Store all collected data
             if all_oi_data:
                 await self.store_oi_data(all_oi_data)
-                await self.cache_oi_data(all_oi_data)
-                
+            
         elapsed = time.time() - start_time
-        self.logger.info(f"Collection cycle completed in {elapsed:.2f}s, collected {len(all_oi_data)} OI records")
+        self.logger.info(f"✅ Collection cycle completed in {elapsed:.2f}s, collected {len(all_oi_data)} total OI records")
         
     async def run(self):
         """Main run loop"""
@@ -431,12 +646,17 @@ class OITracker:
             self.logger.error("Cannot connect to InfluxDB, exiting")
             return
         
+        # Initial symbol discovery
+        futures_symbols = self.discover_active_futures_symbols()
+        self.logger.info(f"📊 Initialized with {len(futures_symbols)} symbols for OI tracking")
+        
         try:
             while self.running:
                 await self.collect_cycle()
                 
-                # Wait 1 minute between cycles
-                await asyncio.sleep(60)
+                # Wait 60 seconds between cycles (master interval)
+                collection_interval = int(os.getenv('OI_COLLECTION_INTERVAL', 60))
+                await asyncio.sleep(collection_interval)
                 
         except KeyboardInterrupt:
             self.logger.info("Received shutdown signal")
