@@ -110,6 +110,8 @@ services:
       - BYBIT_OI_INTERVAL=60             # 1 minute (real-time capable)  
       - OKX_OI_INTERVAL=60               # 1 minute
       - DERIBIT_OI_INTERVAL=60           # 1 minute
+      # OI Symbols Configuration (comma-separated)
+      - OI_SYMBOLS=TON,STRK,AVAX,DOGE,PI,BTC,ETH,ARB
     depends_on:
       - aggr-influx
     networks:

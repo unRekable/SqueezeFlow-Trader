@@ -143,76 +143,72 @@ class OITracker:
         # Track last collection time per exchange
         self.last_collection = {exchange: 0 for exchange in self.exchanges}
         
-        # Setup market discovery
-        self.setup_market_discovery()
+        # Market discovery no longer needed - using config-based symbols
+        self.market_discovery = None
+        self.symbol_discovery = None
     
-    def setup_market_discovery(self):
-        """Setup market discovery services"""
-        try:
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            from data.loaders.market_discovery import MarketDiscovery
-            from data.loaders.symbol_discovery import SymbolDiscovery
-            
-            self.market_discovery = MarketDiscovery()
-            self.symbol_discovery = SymbolDiscovery()
-            self.logger.info("✅ Market discovery services initialized")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize market discovery: {e}")
-            # Fallback to manual symbol list
-            self.market_discovery = None
-            self.symbol_discovery = None
+    
+    def get_configured_symbols(self) -> List[str]:
+        """
+        Get symbols from environment variable configuration
+        Simple, reliable, no database queries needed
+        """
+        symbols_env = os.getenv('OI_SYMBOLS', 'BTC,ETH')
+        symbols = [s.strip().upper() for s in symbols_env.split(',')]
+        self.logger.info(f"📋 Using configured symbols: {symbols}")
+        return symbols
     
     def discover_active_futures_symbols(self) -> Dict[str, List[str]]:
         """
-        Discover active futures symbols from database using market discovery
+        Get configured symbols and validate they have futures markets
         Returns dict mapping base symbols to their futures markets
         """
         futures_symbols = {}
         
-        if not self.market_discovery or not self.symbol_discovery:
-            # Fallback to basic BTC/ETH
-            self.logger.warning("Market discovery not available, using fallback symbols")
-            return {
-                'BTC': ['BINANCE_FUTURES:btcusdt', 'BYBIT:BTCUSDT', 'OKEX:BTC-USDT-SWAP', 'DERIBIT:BTC-PERPETUAL'],
-                'ETH': ['BINANCE_FUTURES:ethusdt', 'BYBIT:ETHUSDT', 'OKEX:ETH-USDT-SWAP', 'DERIBIT:ETH-PERPETUAL']
-            }
+        # Get symbols from configuration
+        configured_symbols = self.get_configured_symbols()
         
-        try:
-            # Discover active symbols from database
-            active_symbols = self.symbol_discovery.discover_symbols_from_database(
-                min_data_points=int(os.getenv('OI_MIN_DATA_POINTS', 1000)),
-                hours_lookback=int(os.getenv('OI_LOOKBACK_HOURS', 24))
-            )
-            
-            self.logger.info(f"🔍 Discovered {len(active_symbols)} active symbols from database")
-            
-            # For each symbol, get futures markets only
-            for symbol in active_symbols:
-                markets_by_type = self.market_discovery.get_markets_by_type(symbol)
-                perp_markets = markets_by_type.get('perp', [])
+        # Generate futures markets dynamically for each symbol
+        for symbol in configured_symbols:
+            symbol_futures = self._generate_futures_markets(symbol)
+            if symbol_futures:
+                futures_symbols[symbol] = symbol_futures
+                self.logger.info(f"📈 {symbol}: {len(symbol_futures)} futures markets generated")
+            else:
+                self.logger.warning(f"⚠️ {symbol}: No futures markets available, skipping")
+        
+        self.logger.info(f"✅ Found {len(futures_symbols)} symbols with futures markets for OI collection")
+        return futures_symbols
+    
+    def _generate_futures_markets(self, symbol: str) -> List[str]:
+        """
+        Dynamically generate futures market identifiers for a symbol
+        Knows the syntax patterns for each exchange
+        """
+        futures = []
+        
+        # PI is just a regular symbol, no special handling needed
+        
+        # Handle XBT/BTC mapping for Kraken
+        kraken_symbol = 'XBT' if symbol == 'BTC' else symbol
+        
+        # Generate futures market identifiers for each exchange
+        exchange_patterns = {
+            'BINANCE_FUTURES': f"{symbol.lower()}usdt",           # binance_futures:btcusdt
+            'BYBIT': f"{symbol.upper()}USDT",                     # BYBIT:BTCUSDT  
+            'OKEX': f"{symbol.upper()}-USDT-SWAP",                # OKEX:BTC-USDT-SWAP
+            'DERIBIT': f"{symbol.upper()}-PERPETUAL",             # DERIBIT:BTC-PERPETUAL (BTC/ETH only)
+        }
+        
+        for exchange, market_format in exchange_patterns.items():
+            # Deribit only has BTC and ETH perpetuals
+            if exchange == 'DERIBIT' and symbol not in ['BTC', 'ETH']:
+                continue
                 
-                if perp_markets:
-                    # Filter for exchanges we support OI collection from
-                    supported_futures = []
-                    for market in perp_markets:
-                        exchange_name = market.split(':')[0].upper()
-                        if any(exchange_name.startswith(ex.upper()) for ex in self.exchanges.keys()):
-                            supported_futures.append(market)
-                    
-                    if supported_futures:
-                        futures_symbols[symbol] = supported_futures
-                        self.logger.debug(f"📈 {symbol}: {len(supported_futures)} futures markets")
-            
-            self.logger.info(f"✅ Found {len(futures_symbols)} symbols with futures markets for OI collection")
-            return futures_symbols
-            
-        except Exception as e:
-            self.logger.error(f"Error discovering futures symbols: {e}")
-            # Fallback to basic symbols
-            return {
-                'BTC': ['BINANCE_FUTURES:btcusdt'],
-                'ETH': ['BINANCE_FUTURES:ethusdt']
-            }
+            market_id = f"{exchange}:{market_format}"
+            futures.append(market_id)
+        
+        return futures
     
     def _format_binance_symbol(self, market: str) -> str:
         """Convert market format to Binance API format"""
