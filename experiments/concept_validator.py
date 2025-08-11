@@ -282,9 +282,9 @@ class ConceptValidator:
         # Check OI behavior around potential squeeze points
         query = f'''
         SELECT 
-            MEAN(open_interest_usd) as avg_oi,
-            MAX(open_interest_usd) as max_oi,
-            MIN(open_interest_usd) as min_oi
+            MEAN(open_interest) as avg_oi,
+            MAX(open_interest) as max_oi,
+            MIN(open_interest) as min_oi
         FROM open_interest
         WHERE symbol = '{symbol}'
         AND exchange = 'TOTAL_AGG'

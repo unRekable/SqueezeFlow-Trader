@@ -293,6 +293,9 @@ data/backtests/
 *_backtest.png
 backtest_*.json
 
+# Results directory (unified location for all backtests)
+/results/
+
 # Strategy performance data
 performance_data/
 strategy_results/
@@ -471,3 +474,7 @@ aggr-server-backup-*/
 backtest_results.png
 data/__force_rebuild__
 real_time_1s_implementation_guide.md
+
+# Temporary debug scripts (DO NOT COMMIT)
+temp_debug_scripts/
+*.tmp.py

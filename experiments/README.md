@@ -2,7 +2,7 @@
 
 ## 🎯 What This Does
 
-This framework **learns WHY** your strategy succeeds or fails, then **modifies its own code** to fix issues. It's not just parameter tuning - it can rewrite the strategy logic itself.
+This framework **learns WHY** your strategy succeeds or fails, then **modifies its own code** to fix issues. It's not just parameter tuning - it can rewrite the strategy logic itself (XXXXXXXX here you must confirm with the user every time.modify this document and all the logic to reflect it)
 
 ## 🚀 Quick Start
 

@@ -80,6 +80,10 @@ class SqueezeFlowStrategy(BaseStrategy):
         # Track strategy state
         self.last_analysis = None
         
+        # Store scores for visualization
+        self.squeeze_scores = []
+        self.timestamps = []
+        
         # Thread safety for parallel processing
         import threading
         self._thread_local = threading.local()
@@ -237,6 +241,12 @@ class SqueezeFlowStrategy(BaseStrategy):
                 # Generate orders if score >= minimum threshold
                 should_trade = scoring_result.get('should_trade', False)
                 total_score = scoring_result.get('total_score', 0)
+                
+                # Store score for visualization (with timestamp from dataset)
+                if 'ohlcv' in dataset and not dataset['ohlcv'].empty:
+                    timestamp = dataset['ohlcv'].index[-1] if hasattr(dataset['ohlcv'].index[-1], 'timestamp') else datetime.now(tz=pytz.UTC)
+                    self.squeeze_scores.append(total_score)
+                    self.timestamps.append(timestamp)
                 
                 self.logger.info(f"📊 {symbol}: Score={total_score:.2f}/10, Should Trade={should_trade}, Min={self.config.min_entry_score}")
                 
@@ -548,3 +558,15 @@ class SqueezeFlowStrategy(BaseStrategy):
             self.logger.error(f"Failed to create thread-safe dataset copy: {e}")
             # Return original dataset as fallback (not thread-safe but functional)
             return dataset
+    
+    def get_squeeze_scores(self) -> Dict[str, Any]:
+        """
+        Get the accumulated squeeze scores for visualization
+        
+        Returns:
+            Dict with timestamps and scores arrays for plotting
+        """
+        return {
+            'timestamps': self.timestamps.copy(),
+            'scores': self.squeeze_scores.copy()
+        }

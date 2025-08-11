@@ -24,7 +24,7 @@ except ImportError:
         enable_spot_cvd = True
         enable_futures_cvd = True
         enable_cvd_divergence = True
-        enable_open_interest = False  # No data available
+        enable_open_interest = True  # OI data available in 'open_interest' field
         enable_spot_volume = True
         enable_futures_volume = True
     

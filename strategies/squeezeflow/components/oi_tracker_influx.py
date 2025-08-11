@@ -60,8 +60,8 @@ class OITrackerInflux:
             # Query for aggregated OI data (using TOTAL_AGG for all exchanges)
             query = f"""
             SELECT 
-                mean(open_interest_usd) as oi_usd,
-                mean(open_interest_coin) as oi_coin
+                mean(open_interest) as oi_usd,
+                mean(open_interest) as oi_coin
             FROM open_interest 
             WHERE symbol = '{symbol}' 
                 AND exchange = 'TOTAL_AGG'
@@ -121,8 +121,8 @@ class OITrackerInflux:
             # Also get futures aggregate (top 3 exchanges)
             query = f"""
             SELECT 
-                mean(open_interest_usd) as oi_usd,
-                mean(open_interest_coin) as oi_coin
+                mean(open_interest) as oi_usd,
+                mean(open_interest) as oi_coin
             FROM open_interest 
             WHERE symbol = '{symbol}' 
                 AND exchange = 'FUTURES_AGG'

@@ -1,34 +1,41 @@
 """
-Backtest Visualizer - Multi-Page Dashboard System
-3 pages: Main Trading, Portfolio Analytics, Exchange Analytics
+Backtest Visualizer - TradingView Unified Dashboard
+Single HTML file with TradingView charts and tabbed navigation
 """
 
 import logging
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, List
 
-# Import Multi-page visualizer for complete dashboard
-from .multi_page_visualizer import MultiPageVisualizer
+# Import TradingView unified - THE ONLY IMPLEMENTATION WE USE
+from .tradingview_unified import TradingViewUnified
 
 logger = logging.getLogger(__name__)
 
 
 class BacktestVisualizer:
-    """Multi-page dashboard system with navigation"""
+    """TradingView unified dashboard - ALWAYS"""
     
-    def __init__(self, output_dir: str = "backtest/results"):
+    def __init__(self, output_dir: str = "."):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        # Use Multi-page visualizer
-        self.visualizer = MultiPageVisualizer(output_dir)
         
     def create_backtest_report(self, results: Dict, dataset: Dict, 
                               executed_orders: List[Dict]) -> str:
-        """Create strategy dashboard"""
+        """Create TradingView unified dashboard - ALWAYS THE SAME"""
         
-        # Use the Strategy visualizer
-        dashboard_path = self.visualizer.create_backtest_report(results, dataset, executed_orders)
+        # ALWAYS use TradingView unified - no conditionals, no fallbacks
+        logger.info("Creating TradingView unified dashboard")
         
-        logger.info(f"Strategy dashboard created: {dashboard_path}")
+        # Add executed_orders to results where TradingView expects them
+        if isinstance(results, dict) and 'executed_orders' not in results:
+            results['executed_orders'] = executed_orders
+        
+        # Create the dashboard
+        tv_viz = TradingViewUnified()
+        dashboard_path = tv_viz.create_dashboard(results, dataset, str(self.output_dir))
+        
+        logger.info(f"✅ TradingView unified dashboard created: {dashboard_path}")
         
         return dashboard_path

@@ -45,7 +45,7 @@ cd "/Users/u/PycharmProjects/SqueezeFlow Trader"
 python3 backtest/reporting/visual_validator.py
 
 # Then read the screenshot to see actual output:
-# Read tool: backtest/results/report_*/dashboard_screenshot_*.png
+# Read tool: report_*/dashboard_screenshot_*.png (now in root directory!)
 ```
 
 **This allows Claude to self-debug by seeing exactly what the user sees!**

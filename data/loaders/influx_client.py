@@ -552,21 +552,47 @@ class OptimizedInfluxClient:
         return query
     
     def _aggregate_ohlcv_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Aggregate OHLCV data across multiple markets"""
+        """Aggregate OHLCV data across multiple markets with outlier filtering"""
         if df.empty:
             return df
         
         try:
-            # Group by time and calculate OHLCV
-            grouped = df.groupby(df.index).agg({
-                'open': 'first',    # First market's open
-                'high': 'max',      # Maximum high across markets
-                'low': 'min',       # Minimum low across markets
-                'close': 'last',    # Last market's close
-                'volume': 'sum'     # Total volume across markets
-            })
+            # First, filter out obvious cross-pair outliers
+            # Calculate median price to detect outliers
+            df['mid_price'] = (df['high'] + df['low']) / 2
             
-            return grouped.sort_index()
+            # Group by time
+            grouped_list = []
+            for time, group in df.groupby(df.index):
+                # Calculate median for outlier detection
+                median_price = group['mid_price'].median()
+                
+                # Filter out prices that are more than 50% away from median
+                # This removes cross-pairs like ETHBTC (0.04) when aggregating BTC
+                valid_mask = (group['mid_price'] > median_price * 0.5) & (group['mid_price'] < median_price * 1.5)
+                valid_group = group[valid_mask]
+                
+                # If all data was filtered out, use original group
+                if valid_group.empty:
+                    valid_group = group
+                
+                # Aggregate the valid markets
+                row = {
+                    'open': valid_group['open'].iloc[0] if len(valid_group) > 0 else group['open'].iloc[0],
+                    'high': valid_group['high'].max(),
+                    'low': valid_group['low'].min(),  # Now MIN only within similar price ranges
+                    'close': valid_group['close'].iloc[-1] if len(valid_group) > 0 else group['close'].iloc[-1],
+                    'volume': group['volume'].sum()  # Always sum all volume
+                }
+                grouped_list.append((time, row))
+            
+            # Create DataFrame from aggregated data
+            if grouped_list:
+                index, data = zip(*grouped_list)
+                grouped = pd.DataFrame(list(data), index=index)
+                return grouped.sort_index()
+            
+            return pd.DataFrame()
             
         except Exception as e:
             self.logger.error(f"OHLCV aggregation failed: {e}")
@@ -1038,8 +1064,8 @@ class OptimizedInfluxClient:
                 # Get raw data points
                 query = f"""
                 SELECT 
-                    open_interest_usd as oi_usd,
-                    open_interest_coin as oi_coin
+                    open_interest as oi_usd,
+                    open_interest as oi_coin
                 FROM open_interest 
                 WHERE symbol = '{symbol}' 
                     AND exchange = '{exchange}'
@@ -1051,10 +1077,10 @@ class OptimizedInfluxClient:
                 # Aggregate by timeframe
                 query = f"""
                 SELECT 
-                    mean(open_interest_usd) as oi_usd,
-                    mean(open_interest_coin) as oi_coin,
-                    max(open_interest_usd) as oi_usd_max,
-                    min(open_interest_usd) as oi_usd_min
+                    mean(open_interest) as oi_usd,
+                    mean(open_interest) as oi_coin,
+                    max(open_interest) as oi_usd_max,
+                    min(open_interest) as oi_usd_min
                 FROM open_interest 
                 WHERE symbol = '{symbol}' 
                     AND exchange = '{exchange}'
@@ -1064,7 +1090,11 @@ class OptimizedInfluxClient:
                 ORDER BY time DESC
                 """
             
-            result = self.client.query(query)
+            client = self._get_connection()
+            try:
+                result = client.query(query)
+            finally:
+                self._return_connection(client)
             
             if result:
                 df = pd.DataFrame(list(result.get_points()))
@@ -1076,7 +1106,7 @@ class OptimizedInfluxClient:
             return pd.DataFrame()
             
         except Exception as e:
-            logger.error(f"Error fetching OI data: {e}")
+            self.logger.error(f"Error fetching OI data: {e}")
             return pd.DataFrame()
     
     def get_oi_by_exchanges(self, symbol: str, start_time: datetime, end_time: datetime,
@@ -1119,8 +1149,8 @@ class OptimizedInfluxClient:
         try:
             query = f"""
             SELECT 
-                open_interest_usd as oi_usd,
-                open_interest_coin as oi_coin
+                open_interest as oi_usd,
+                open_interest as oi_coin
             FROM open_interest 
             WHERE symbol = '{symbol}' 
                 AND exchange = '{exchange}'
@@ -1128,7 +1158,11 @@ class OptimizedInfluxClient:
             LIMIT 1
             """
             
-            result = self.client.query(query)
+            client = self._get_connection()
+            try:
+                result = client.query(query)
+            finally:
+                self._return_connection(client)
             
             if result:
                 points = list(result.get_points())

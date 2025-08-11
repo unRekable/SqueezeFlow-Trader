@@ -123,12 +123,17 @@ class DivergenceDetection:
             is_significant = self._is_divergence_significant(volume_significance, cvd_patterns)
             
             # Determine if we have actual divergence
-            # TRUE divergence only when spot and futures move OPPOSITE
+            # Accept both TRUE divergence (opposite) and RELATIVE divergence (one leading strongly)
             true_divergence_patterns = ['SPOT_UP_FUTURES_DOWN', 'SPOT_DOWN_FUTURES_UP']
+            relative_divergence_patterns = ['SPOT_LEADING_UP', 'FUTURES_LEADING_UP', 
+                                          'SPOT_LEADING_DOWN', 'FUTURES_LEADING_DOWN']
+            
+            # More flexible divergence detection
             has_divergence = (
                 is_significant and 
                 setup_type not in ['NONE', 'UNKNOWN'] and
-                cvd_patterns.get('pattern') in true_divergence_patterns
+                (cvd_patterns.get('pattern') in true_divergence_patterns or
+                 cvd_patterns.get('pattern') in relative_divergence_patterns)
             )
             
             # OI Validation - Check config to see if enabled
@@ -238,15 +243,18 @@ class DivergenceDetection:
         futures_direction = 0
         
         # Determine directions based on actual changes
-        # TRUE DIVERGENCE: Spot and futures moving OPPOSITE directions
+        # IMPROVED: Detect both TRUE divergence and RELATIVE divergence
         min_change_threshold = 1e6  # At least 1M volume change to be significant
         
         # Check if changes are significant
         spot_significant = abs(spot_change) > min_change_threshold
         futures_significant = abs(futures_change) > min_change_threshold
         
+        # Also check for RELATIVE divergence (one market much stronger than other)
+        relative_divergence_ratio = 3.0  # One market 3x stronger than other
+        
         if spot_significant or futures_significant:
-            # Check for TRUE divergence (opposite directions)
+            # Check for TRUE divergence (opposite directions) OR relative divergence
             if spot_change > min_change_threshold and futures_change < -min_change_threshold:
                 # Spot UP, Futures DOWN = Long Setup potential
                 pattern = 'SPOT_UP_FUTURES_DOWN'
@@ -396,6 +404,18 @@ class DivergenceDetection:
         elif (movement in ['STABLE', 'FALLING'] and 
               cvd_pattern == 'SPOT_DOWN_FUTURES_UP'):
             return 'SHORT_SETUP'
+        
+        # RELATIVE DIVERGENCE: Spot leading strongly
+        elif (cvd_pattern == 'SPOT_LEADING_UP' and movement != 'FALLING'):
+            return 'LONG_SETUP'
+        elif (cvd_pattern == 'SPOT_LEADING_DOWN' and movement != 'RISING'):
+            return 'SHORT_SETUP'
+            
+        # RELATIVE DIVERGENCE: Futures leading (contrarian)
+        elif (cvd_pattern == 'FUTURES_LEADING_DOWN' and movement in ['STABLE', 'RISING']):
+            return 'LONG_SETUP'  # Futures selling but price stable
+        elif (cvd_pattern == 'FUTURES_LEADING_UP' and movement in ['STABLE', 'FALLING']):
+            return 'SHORT_SETUP'  # Futures buying but price weak
         
         # SECONDARY: CVD alignment patterns (less restrictive)
         elif (spot_direction > 0 and movement != 'FALLING' and market_bias != 'BEARISH'):

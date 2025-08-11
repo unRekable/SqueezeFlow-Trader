@@ -28,8 +28,10 @@ class DateTimeEncoder(JSONEncoder):
 class StrategyVisualizer:
     """Dashboard with OUR strategy indicators only"""
     
-    def __init__(self, output_dir: str = "backtest/results"):
+    def __init__(self, output_dir: str = "."):
+        # Changed default to current directory
         self.output_dir = Path(output_dir)
+        self.logger = logger  # Add logger attribute
         
     def create_backtest_report(self, results: Dict, dataset: Dict, 
                               executed_orders: List[Dict]) -> str:
@@ -44,23 +46,85 @@ class StrategyVisualizer:
         symbol = results.get('symbol', 'UNKNOWN') if isinstance(results, dict) else 'UNKNOWN'
         ohlcv = dataset.get('ohlcv', pd.DataFrame()) if isinstance(dataset, dict) else pd.DataFrame()
         
+        # CRITICAL FIX: Data validation and corruption detection
+        if not ohlcv.empty:
+            logger.info(f"🔍 Validating OHLCV data for {symbol}...")
+            
+            # Calculate price statistics for outlier detection
+            price_cols = ['open', 'high', 'low', 'close']
+            all_prices = []
+            for col in price_cols:
+                if col in ohlcv.columns:
+                    all_prices.extend(ohlcv[col].dropna().tolist())
+            
+            if all_prices:
+                price_median = pd.Series(all_prices).median()
+                price_std = pd.Series(all_prices).std()
+                
+                # Define reasonable price bounds (3 standard deviations from median)
+                min_reasonable_price = max(0.01, price_median - 3 * price_std)
+                max_reasonable_price = price_median + 3 * price_std
+                
+                # Log corruption detection
+                corrupted_lows = ohlcv['low'] < min_reasonable_price
+                if corrupted_lows.any():
+                    corrupted_count = corrupted_lows.sum()
+                    logger.warning(f"🚨 CORRUPTION DETECTED: {corrupted_count} low values below {min_reasonable_price:.2f}")
+                    logger.warning(f"   Sample corrupted lows: {ohlcv.loc[corrupted_lows, 'low'].head().tolist()}")
+                    
+                    # FIX: Replace corrupted values with interpolation
+                    for col in price_cols:
+                        if col in ohlcv.columns:
+                            # Replace outliers with interpolated values
+                            mask = (ohlcv[col] < min_reasonable_price) | (ohlcv[col] > max_reasonable_price)
+                            if mask.any():
+                                logger.info(f"   Fixing {mask.sum()} corrupted {col} values")
+                                ohlcv.loc[mask, col] = np.nan
+                                # Use linear interpolation, then forward fill, then backward fill
+                                ohlcv[col] = ohlcv[col].interpolate(method='linear')
+                                ohlcv[col] = ohlcv[col].fillna(method='ffill')
+                                ohlcv[col] = ohlcv[col].fillna(method='bfill')
+                    
+                    logger.info(f"✅ Data corruption fixed for {symbol}")
+                
+                # Validate OHLC relationships
+                invalid_ohlc = (ohlcv['low'] > ohlcv['high']) | (ohlcv['open'] < ohlcv['low']) | (ohlcv['close'] > ohlcv['high'])
+                if invalid_ohlc.any():
+                    logger.warning(f"🚨 OHLC relationship violations detected: {invalid_ohlc.sum()} candles")
+                    # Fix: Ensure low <= open,close <= high
+                    ohlcv['low'] = ohlcv[['low', 'open', 'close']].min(axis=1)
+                    ohlcv['high'] = ohlcv[['high', 'open', 'close']].max(axis=1)
+        
         # Prepare all timeframe data for switching
         all_candles = {}
         all_volumes = {}
         
-        # Helper function to resample OHLCV
+        # Helper function to resample OHLCV with validation
         def resample_ohlcv(df, rule):
             if df.empty:
                 return df
             try:
-                return df.resample(rule).agg({
+                # Ensure we have enough data points for meaningful resampling
+                if len(df) < 2:
+                    return df
+                    
+                resampled = df.resample(rule).agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
                     'volume': 'sum'
                 }).dropna()
-            except:
+                
+                # Validate resampled data
+                if not resampled.empty:
+                    # Fix any remaining OHLC violations after resampling
+                    resampled['low'] = resampled[['low', 'open', 'close']].min(axis=1)
+                    resampled['high'] = resampled[['high', 'open', 'close']].max(axis=1)
+                
+                return resampled
+            except Exception as e:
+                logger.error(f"Resampling failed for rule {rule}: {e}")
                 return df
         
         # Determine base timeframe from data
@@ -78,13 +142,25 @@ class StrategyVisualizer:
                     base_timeframe = '5m'
         
         # Generate data for each timeframe
-        timeframes = {
-            '1s': None,  # Raw data if 1s
-            '1m': '1min',
-            '5m': '5min', 
-            '15m': '15min',
-            '1h': '1h'
+        # Only include timeframes that are >= base_timeframe
+        all_timeframes = {
+            '1s': (None, 1),      # Raw data if 1s, 1 second
+            '1m': ('1min', 60),   # 60 seconds
+            '5m': ('5min', 300),  # 300 seconds
+            '15m': ('15min', 900), # 900 seconds
+            '1h': ('1h', 3600)    # 3600 seconds
         }
+        
+        # Determine which timeframes are available based on base data
+        base_seconds = {'1s': 1, '1m': 60, '5m': 300}.get(base_timeframe, 300)
+        available_timeframes = {}
+        
+        for tf_label, (tf_rule, tf_seconds) in all_timeframes.items():
+            # Can only aggregate UP from base timeframe
+            if tf_seconds >= base_seconds:
+                available_timeframes[tf_label] = tf_rule
+        
+        timeframes = available_timeframes
         
         for tf_label, tf_rule in timeframes.items():
             if tf_rule is None and base_timeframe == '1s':
@@ -94,8 +170,8 @@ class StrategyVisualizer:
                 # Resample to this timeframe
                 tf_data = resample_ohlcv(ohlcv, tf_rule)
             else:
-                # Skip if we don't have 1s data
-                tf_data = pd.DataFrame()
+                # For base timeframe without resampling
+                tf_data = ohlcv
             
             # Convert to chart format
             candles = []
@@ -108,24 +184,40 @@ class StrategyVisualizer:
                 
                 for idx, row in sampled.iterrows():
                     ts = int(idx.timestamp())
-                    candles.append({
-                        'time': ts,
-                        'open': float(row['open']),
-                        'high': float(row['high']),
-                        'low': float(row['low']),
-                        'close': float(row['close'])
-                    })
-                    volumes.append({
-                        'time': ts,
-                        'value': float(row.get('volume', 0)),
-                        'color': '#26a69a' if row['close'] >= row['open'] else '#ef5350'
-                    })
+                    
+                    # Additional validation at conversion time
+                    open_val = float(row['open'])
+                    high_val = float(row['high']) 
+                    low_val = float(row['low'])
+                    close_val = float(row['close'])
+                    
+                    # Final sanity check - ensure OHLC relationships are valid
+                    if low_val <= high_val and min(open_val, close_val) >= low_val and max(open_val, close_val) <= high_val:
+                        candles.append({
+                            'time': ts,
+                            'open': open_val,
+                            'high': high_val,
+                            'low': low_val,
+                            'close': close_val
+                        })
+                        volumes.append({
+                            'time': ts,
+                            'value': float(row.get('volume', 0)),
+                            'color': '#26a69a' if close_val >= open_val else '#ef5350'
+                        })
+                    else:
+                        logger.warning(f"⚠️  Skipping invalid OHLC at {idx}: O={open_val:.2f}, H={high_val:.2f}, L={low_val:.2f}, C={close_val:.2f}")
             
             all_candles[tf_label] = candles
             all_volumes[tf_label] = volumes
         
-        # Default to 1m if available, else use base
-        default_timeframe = '1m' if all_candles.get('1m') else base_timeframe
+        # Default to 5m for better visibility, then 1m, then base
+        if all_candles.get('5m'):
+            default_timeframe = '5m'
+        elif all_candles.get('1m'):
+            default_timeframe = '1m'
+        else:
+            default_timeframe = base_timeframe
         
         # Spot CVD - OUR indicator from dataset
         spot_cvd_data = []
@@ -171,19 +263,44 @@ class StrategyVisualizer:
         # Strategy Signals/Scores - from results or dataset
         signal_data = []
         
-        # Check multiple possible fields for strategy scores
-        score_fields = ['squeeze_scores', 'strategy_scores', 'signals', 'squeeze_score']
+        # First check for squeeze_scores from the strategy (new format with timestamps and scores)
+        if isinstance(results, dict) and 'squeeze_scores' in results:
+            squeeze_scores = results['squeeze_scores']
+            if isinstance(squeeze_scores, dict) and 'timestamps' in squeeze_scores and 'scores' in squeeze_scores:
+                timestamps = squeeze_scores['timestamps']
+                scores = squeeze_scores['scores']
+                if timestamps and scores and len(timestamps) == len(scores):
+                    # Convert to our expected format
+                    step = max(1, len(timestamps) // 2000)  # Downsample if > 2000 points
+                    for i in range(0, len(timestamps), step):
+                        ts = timestamps[i]
+                        if hasattr(ts, 'timestamp'):
+                            unix_time = int(ts.timestamp())
+                        elif isinstance(ts, (int, float)):
+                            unix_time = int(ts)
+                        else:
+                            unix_time = int(pd.Timestamp(ts).timestamp())
+                        signal_data.append({
+                            'time': unix_time,
+                            'value': float(scores[i])
+                        })
+                    self.logger.info(f"📊 Loaded {len(signal_data)} squeeze scores from strategy")
         
-        if isinstance(results, dict):
-            for field in score_fields:
-                if field in results:
-                    scores = results[field]
-                    if isinstance(scores, pd.Series) and not scores.empty:
-                        step = max(1, len(scores) // 2000)
-                        for idx, val in scores.iloc[::step].items():
-                            signal_data.append({
-                                'time': int(idx.timestamp()),
-                                'value': float(val)
+        # Fallback to old format if new format not available
+        if not signal_data:
+            # Check multiple possible fields for strategy scores
+            score_fields = ['strategy_scores', 'signals', 'squeeze_score']
+            
+            if isinstance(results, dict):
+                for field in score_fields:
+                    if field in results:
+                        scores = results[field]
+                        if isinstance(scores, pd.Series) and not scores.empty:
+                            step = max(1, len(scores) // 2000)
+                            for idx, val in scores.iloc[::step].items():
+                                signal_data.append({
+                                    'time': int(idx.timestamp()),
+                                    'value': float(val)
                             })
                         break
                     elif isinstance(scores, list) and scores:
@@ -403,11 +520,7 @@ class StrategyVisualizer:
             <h1>{symbol} - Strategy Backtest</h1>
             <div class="timeframe-selector">
                 <span style="color: #787b86;">Timeframe:</span>
-                <button class="timeframe-btn {'active' if default_timeframe == '1s' else ''}" data-tf="1s">1s</button>
-                <button class="timeframe-btn {'active' if default_timeframe == '1m' else ''}" data-tf="1m">1m</button>
-                <button class="timeframe-btn {'active' if default_timeframe == '5m' else ''}" data-tf="5m">5m</button>
-                <button class="timeframe-btn {'active' if default_timeframe == '15m' else ''}" data-tf="15m">15m</button>
-                <button class="timeframe-btn {'active' if default_timeframe == '1h' else ''}" data-tf="1h">1h</button>
+                {''.join([f'<button class="timeframe-btn {"active" if default_timeframe == tf else ""}" data-tf="{tf}">{tf}</button>' for tf in timeframes.keys()])}
             </div>
         </div>
         <div class="metrics">

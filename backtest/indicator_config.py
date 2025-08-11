@@ -22,8 +22,8 @@ class IndicatorConfig:
     enable_futures_cvd: bool = True  
     enable_cvd_divergence: bool = True
     
-    # Open Interest - DISABLED (no data)
-    enable_open_interest: bool = False
+    # Open Interest - ENABLED (OI data confirmed available in open_interest measurement)
+    enable_open_interest: bool = True
     
     # Volume data - all enabled by default
     enable_spot_volume: bool = True

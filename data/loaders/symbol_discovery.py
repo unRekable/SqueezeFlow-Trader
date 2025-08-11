@@ -449,7 +449,7 @@ class SymbolDiscovery:
         """Check Open Interest data quality for a symbol"""
         try:
             query = f"""
-            SELECT COUNT(open_interest_usd) as data_points
+            SELECT COUNT(open_interest) as data_points
             FROM "open_interest"
             WHERE symbol = '{oi_symbol}'
             AND time > now() - {hours_lookback}h

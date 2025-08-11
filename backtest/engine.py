@@ -82,14 +82,17 @@ class BacktestEngine:
         self.portfolio = Portfolio(initial_balance)
         self.data_pipeline = create_data_pipeline()
         
-        # Create a unified report directory for this backtest session
+        # Create a unified results directory with timestamped subfolder
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.report_dir = Path(f"backtest/results/report_{timestamp}")
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        self.report_dir = results_dir / f"backtest_{timestamp}"
         self.report_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger = BacktestLogger(log_dir=str(self.report_dir))
-        self.visualizer = BacktestVisualizer(output_dir=str(self.report_dir.parent))
+        # Pass the report directory to visualizer
+        self.visualizer = BacktestVisualizer(output_dir=str(self.report_dir))
         
         # Initialize performance monitoring
         self.performance_monitor = None
@@ -301,9 +304,20 @@ class BacktestEngine:
         strategy_time = time.time() - strategy_start
         self.logger.info(f"⏱️  Strategy processing took: {strategy_time:.2f} seconds")
         
+        # Extract squeeze scores from strategy for visualization
+        squeeze_scores_data = {}
+        if hasattr(self.strategy, 'get_squeeze_scores'):
+            try:
+                squeeze_scores_data = self.strategy.get_squeeze_scores()
+                self.logger.info(f"📈 Extracted {len(squeeze_scores_data.get('scores', []))} squeeze scores for visualization")
+            except Exception as e:
+                self.logger.debug(f"Could not extract squeeze scores: {e}")
+        
         # STEP 3: GENERATE RESULTS
         results_start = time.time()
         result = self._create_result(full_dataset, executed_orders)
+        # Add squeeze scores to results
+        result['squeeze_scores'] = squeeze_scores_data
         results_time = time.time() - results_start
         self.logger.info(f"⏱️  Results generation took: {results_time:.2f} seconds")
         
@@ -1532,7 +1546,7 @@ class BacktestEngine:
             
             # TEMP: Skip slow report generation
             # report = self.performance_monitor.analyzer.generate_performance_report()
-            report = {'summary': 'Report generation disabled for speed'}
+            report = {'summary': {}}  # Make summary a dict, not a string!
             
             # Log key performance metrics
             summary = report.get('summary', {})

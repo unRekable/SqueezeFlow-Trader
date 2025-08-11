@@ -10,16 +10,25 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
+import os
 
 # Import the strategy visualizer and encoder for page 1
 from .strategy_visualizer import StrategyVisualizer, DateTimeEncoder
+
+# Import the new TradingView single chart implementation
+try:
+    from .tradingview_single_chart import TradingViewSingleChart
+    TRADINGVIEW_AVAILABLE = True
+except ImportError:
+    TRADINGVIEW_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 class MultiPageVisualizer:
     """Creates complete 3-page dashboard system"""
     
-    def __init__(self, output_dir: str = "backtest/results"):
+    def __init__(self, output_dir: str = "."):
+        # Changed default to current directory
         self.output_dir = Path(output_dir)
         self.strategy_viz = StrategyVisualizer(output_dir)
         
@@ -32,20 +41,33 @@ class MultiPageVisualizer:
         report_dir = self.output_dir / f"report_{timestamp}"
         report_dir.mkdir(parents=True, exist_ok=True)
         
-        # Page 1: Main Trading Dashboard (create directly here)
-        main_path = self._create_main_dashboard(report_dir, results, dataset, executed_orders)
+        # Double-check directory exists
+        if not report_dir.exists():
+            logger.error(f"Failed to create report directory: {report_dir}")
+            raise FileNotFoundError(f"Could not create report directory: {report_dir}")
+        logger.info(f"Report directory created: {report_dir}")
         
-        # Page 2: Portfolio Analytics
-        portfolio_path = self._create_portfolio_page(report_dir, results, dataset, executed_orders)
-        
-        # Page 3: Exchange Analytics
-        exchange_path = self._create_exchange_page(report_dir, results, dataset)
-        
-        # Create navigation index
-        index_path = self._create_index_page(report_dir, results)
-        
-        # Update all pages with navigation
-        self._add_navigation_to_pages(report_dir)
+        try:
+            # Page 1: Main Trading Dashboard (create directly here)
+            main_path = self._create_main_dashboard(report_dir, results, dataset, executed_orders)
+            
+            # Page 2: Portfolio Analytics
+            portfolio_path = self._create_portfolio_page(report_dir, results, dataset, executed_orders)
+            
+            # Page 3: Exchange Analytics
+            exchange_path = self._create_exchange_page(report_dir, results, dataset)
+            
+            # Create navigation index
+            index_path = self._create_index_page(report_dir, results)
+            
+            # Update all pages with navigation
+            self._add_navigation_to_pages(report_dir)
+        except Exception as e:
+            logger.error(f"Error creating multi-page dashboard: {e}")
+            # Ensure at least one HTML file exists
+            error_path = report_dir / "error.html"
+            error_path.write_text(f"<html><body><h1>Dashboard Error: {e}</h1></body></html>")
+            return str(report_dir)
         
         logger.info(f"✅ Multi-page dashboard created: {report_dir}")
         logger.info(f"   Main: {main_path}")
@@ -56,34 +78,65 @@ class MultiPageVisualizer:
     
     def _create_main_dashboard(self, report_dir: Path, results: Dict, 
                               dataset: Dict, executed_orders: List[Dict]) -> str:
-        """Create main dashboard using strategy visualizer"""
-        # Import the function to generate the HTML
+        """Create main dashboard using strategy visualizer logic directly"""
+        
+        # Check if we should use the new TradingView single chart implementation
+        use_tradingview = os.environ.get('USE_TRADINGVIEW_PANES', 'false').lower() == 'true'
+        
+        logger.info(f"USE_TRADINGVIEW_PANES: {os.environ.get('USE_TRADINGVIEW_PANES')}")
+        logger.info(f"use_tradingview: {use_tradingview}")
+        logger.info(f"TRADINGVIEW_AVAILABLE: {TRADINGVIEW_AVAILABLE}")
+        
+        if use_tradingview and TRADINGVIEW_AVAILABLE:
+            # Use the new TradingView single chart implementation with native panes
+            logger.info("Using TradingView single chart implementation with native panes")
+            try:
+                tv_viz = TradingViewSingleChart()
+                
+                # Add executed_orders to results if needed
+                if 'executed_orders' not in results and executed_orders:
+                    results['executed_orders'] = executed_orders
+                
+                dashboard_path = tv_viz.create_dashboard(results, dataset, str(report_dir))
+                logger.info(f"✅ TradingView dashboard created: {dashboard_path}")
+                return dashboard_path
+            except Exception as e:
+                logger.error(f"Failed to create TradingView dashboard: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                logger.info("Falling back to standard dashboard")
+        
+        # Original implementation
+        # Import what we need from strategy_visualizer
         from .strategy_visualizer import StrategyVisualizer
+        import tempfile
         
-        # Create a temporary instance to get the HTML
-        temp_viz = StrategyVisualizer(str(report_dir.parent))
-        
-        # Generate the HTML content but save to our directory
-        temp_path = temp_viz.create_backtest_report(results, dataset, executed_orders)
-        
-        # Read the generated HTML
-        with open(temp_path, 'r') as f:
-            html_content = f.read()
-        
-        # Save to our report directory
-        dashboard_path = report_dir / "dashboard.html"
-        report_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
-        dashboard_path.write_text(html_content)
-        
-        # Clean up temp file
-        Path(temp_path).unlink(missing_ok=True)
-        
-        # Clean up temp directory if empty
-        temp_dir = Path(temp_path).parent
-        if temp_dir.exists() and not any(temp_dir.iterdir()):
-            temp_dir.rmdir()
-        
-        return str(dashboard_path)
+        # Create temp visualizer to get the HTML
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_viz = StrategyVisualizer(temp_dir)
+                temp_path = temp_viz.create_backtest_report(results, dataset, executed_orders)
+                
+                # Read the generated HTML
+                with open(temp_path, 'r') as f:
+                    html_content = f.read()
+            
+            # Write to our directory
+            dashboard_path = report_dir / "dashboard.html"
+            dashboard_path.write_text(html_content)
+            
+            return str(dashboard_path)
+        except Exception as e:
+            logger.error(f"Failed to create main dashboard: {e}")
+            # Create a simple error page
+            dashboard_path = report_dir / "dashboard.html"
+            error_html = f"""<html><body>
+            <h1>Dashboard Generation Error</h1>
+            <p>Error: {str(e)}</p>
+            <p>Please check the logs for more details.</p>
+            </body></html>"""
+            dashboard_path.write_text(error_html)
+            return str(dashboard_path)
     
     def _create_portfolio_page(self, report_dir: Path, results: Dict, 
                               dataset: Dict, executed_orders: List[Dict]) -> str:
@@ -304,8 +357,19 @@ class MultiPageVisualizer:
 </body>
 </html>"""
         
+        # Ensure directory exists before writing
+        report_dir.mkdir(parents=True, exist_ok=True)
+        
         portfolio_path = report_dir / "portfolio.html"
-        portfolio_path.write_text(html)
+        logger.info(f"Writing portfolio to: {portfolio_path}")
+        
+        try:
+            portfolio_path.write_text(html)
+            logger.info(f"Successfully wrote portfolio.html to {portfolio_path}")
+        except Exception as e:
+            logger.error(f"Failed to write portfolio.html: {e}")
+            raise
+            
         return str(portfolio_path)
     
     def _create_exchange_page(self, report_dir: Path, results: Dict, dataset: Dict) -> str:
