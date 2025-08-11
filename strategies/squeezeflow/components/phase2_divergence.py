@@ -14,8 +14,18 @@ from datetime import datetime
 import os
 import sys
 
-# Import optimized statistics functions
+# Import configuration to check what's enabled
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
+try:
+    from backtest.indicator_config import get_indicator_config
+except ImportError:
+    # Fallback if running outside backtest
+    class DefaultConfig:
+        enable_open_interest = False
+    def get_indicator_config():
+        return DefaultConfig()
+
+# Import optimized statistics functions
 from utils.statistics import (
     rolling_divergence_analysis,
     vectorized_momentum_analysis,
@@ -121,11 +131,13 @@ class DivergenceDetection:
                 cvd_patterns.get('pattern') in true_divergence_patterns
             )
             
-            # OI Validation - CRITICAL for squeeze confirmation
+            # OI Validation - Check config to see if enabled
+            config = get_indicator_config()
             oi_data = {}
-            oi_confirmed = False
+            oi_confirmed = False  # Default to neutral
             
-            if has_divergence and OI_TRACKING_AVAILABLE:
+            # Only use OI if enabled in config AND available
+            if has_divergence and config.enable_open_interest and OI_TRACKING_AVAILABLE:
                 # Only check OI if we have a divergence signal
                 symbol = dataset.get('symbol', 'BTC')
                 
@@ -151,9 +163,9 @@ class DivergenceDetection:
                 'volume_significance': volume_significance,
                 'is_significant': is_significant,
                 'market_imbalance': self._assess_market_imbalance(cvd_patterns),
-                'oi_data': oi_data,  # NEW: OI information
-                'oi_confirmed': oi_confirmed,  # NEW: OI validation result
-                'squeeze_valid': has_divergence and oi_confirmed,  # NEW: Full squeeze validation
+                'oi_data': oi_data,  # Empty - OI disabled
+                'oi_confirmed': False,  # Neutral - OI disabled
+                'squeeze_valid': has_divergence,  # Just use divergence without OI check
                 'timestamp': datetime.now()
             }
             

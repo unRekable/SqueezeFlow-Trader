@@ -1,0 +1,14 @@
+{
+  "dashboard": "backtest/results/report_20250811_032750/dashboard.html",
+  "file_size_mb": 4.003702163696289,
+  "has_chart_data": true,
+  "has_results": true,
+  "data_points": 847,
+  "actual_problem": "Prices look wrong: 118349.65625",
+  "base64_length": 31624,
+  "decoded_bytes": 23716,
+  "first_timestamp": 1754819580000,
+  "first_open": 118349.65625,
+  "final_balance": 9988.25546018094,
+  "template": "unknown"
+}

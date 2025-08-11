@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import multiprocessing
 import queue
+from pathlib import Path
 
 from data.pipeline import create_data_pipeline, DataPipeline
 
@@ -80,8 +81,15 @@ class BacktestEngine:
         self.leverage = leverage
         self.portfolio = Portfolio(initial_balance)
         self.data_pipeline = create_data_pipeline()
-        self.logger = BacktestLogger()
-        self.visualizer = BacktestVisualizer()
+        
+        # Create a unified report directory for this backtest session
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.report_dir = Path(f"backtest/results/report_{timestamp}")
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.logger = BacktestLogger(log_dir=str(self.report_dir))
+        self.visualizer = BacktestVisualizer(output_dir=str(self.report_dir.parent))
         
         # Initialize performance monitoring
         self.performance_monitor = None
@@ -184,9 +192,10 @@ class BacktestEngine:
         
         self.logger.info(f"🚀 Starting rolling window backtest: {symbol} from {start_date} to {end_date}")
         self.logger.info(f"💰 Initial balance: ${self.initial_balance:,.2f}")
-        self.logger.info("🔄 Using 4-hour rolling windows with 5-minute steps")
+        self.logger.info("📊 Processing every candle sequentially (real-time simulation)")
         
         # STEP 1: MEMORY-EFFICIENT DATA LOADING
+        data_load_start = time.time()
         if self.enable_1s_mode:
             self.logger.info("🚨 1s MODE: Using streaming data pipeline to prevent OOM errors")
             self.logger.info(f"⚙️  Memory limit: {self.max_memory_gb}GB, Chunk size: {self.chunk_hours}h")
@@ -232,7 +241,11 @@ class BacktestEngine:
             self.logger.info(f"✅ Data loaded: {full_dataset['metadata']['data_points']} data points")
             self.logger.info(f"📈 Markets: {full_dataset['metadata']['spot_markets_count']} SPOT, {full_dataset['metadata']['futures_markets_count']} FUTURES")
         
+        data_load_time = time.time() - data_load_start
+        self.logger.info(f"⏱️  Data loading took: {data_load_time:.2f} seconds")
+        
         # STEP 2: MEMORY-EFFICIENT ROLLING WINDOW STRATEGY PROCESSING
+        strategy_start = time.time()
         if self.enable_1s_mode:
             self.logger.info("🧠 Running memory-efficient streaming strategy analysis...")
         else:
@@ -285,18 +298,52 @@ class BacktestEngine:
         # Final memory cleanup
         self._cleanup_memory()
         
+        strategy_time = time.time() - strategy_start
+        self.logger.info(f"⏱️  Strategy processing took: {strategy_time:.2f} seconds")
+        
         # STEP 3: GENERATE RESULTS
+        results_start = time.time()
         result = self._create_result(full_dataset, executed_orders)
+        results_time = time.time() - results_start
+        self.logger.info(f"⏱️  Results generation took: {results_time:.2f} seconds")
         
         # STEP 4: CREATE VISUALIZATIONS
         self.logger.info("📊 Generating visualizations...")
+        viz_start = time.time()
         visualization_path = self.visualizer.create_backtest_report(
             result, full_dataset, executed_orders
         )
+        viz_time = time.time() - viz_start
+        self.logger.info(f"⏱️  Visualization generation took: {viz_time:.2f} seconds")
         result['visualization_path'] = visualization_path
+        
+        # Run visual validation to self-debug (crucial for optimization framework)
+        try:
+            from backtest.reporting.visual_validator import VisualValidator
+            validator = VisualValidator()
+            validation_result = validator.validate_dashboard(visualization_path, auto_screenshot=False)
+            
+            if validation_result["issues"]:
+                self.logger.warning(f"⚠️  Dashboard validation found {len(validation_result['issues'])} issue(s)")
+                for issue in validation_result["issues"][:2]:
+                    self.logger.warning(f"   - {issue}")
+            else:
+                self.logger.info("✅ Dashboard validation passed - all data properly displayed")
+                
+        except Exception as e:
+            self.logger.debug(f"Visual validation skipped: {e}")
         
         self.logger.info(f"🎯 Backtest completed - Final balance: ${result['final_balance']:,.2f}")
         self.logger.info(f"📈 Total return: {result['total_return']:.2f}%")
+        
+        # Log timing summary
+        total_time = time.time() - (start_time.timestamp() if hasattr(start_time, 'timestamp') else 0)
+        self.logger.info("⏱️  === PERFORMANCE SUMMARY ===")
+        self.logger.info(f"⏱️  Data loading: {data_load_time:.2f}s")
+        self.logger.info(f"⏱️  Strategy processing: {strategy_time:.2f}s")
+        self.logger.info(f"⏱️  Results generation: {results_time:.2f}s")
+        self.logger.info(f"⏱️  Visualization: {viz_time:.2f}s")
+        self.logger.info(f"⏱️  TOTAL: {data_load_time + strategy_time + results_time + viz_time:.2f}s")
         
         # Log final memory statistics
         if self.enable_1s_mode:
@@ -315,28 +362,26 @@ class BacktestEngine:
     def _run_rolling_window_backtest(self, full_dataset: Dict, start_time: datetime, 
                                    end_time: datetime, timeframe: str) -> List[Dict]:
         """
-        Process backtest using rolling 4-hour windows stepping forward 5 minutes at a time
-        This eliminates lookahead bias by only providing data up to "current time"
+        Process backtest by stepping through each candle sequentially,
+        simulating real-time trading where strategy evaluates on every new candle.
         
         Args:
             full_dataset: Complete dataset loaded from data pipeline
             start_time: Backtest start time
             end_time: Backtest end time  
-            timeframe: Trading timeframe (e.g., '5m')
+            timeframe: Trading timeframe (e.g., '1s', '1m', '5m')
             
         Returns:
-            List of executed orders from all windows
+            List of executed orders
         """
-        # Rolling window parameters (adaptive for 1s mode)
+        # Use efficient candle-by-candle processing for all timeframes
         if self.enable_1s_mode or timeframe == '1s':
-            # Use efficient implementation for 1s mode
-            self.logger.info("🚀 Using EFFICIENT 1s implementation (no data copying)")
+            self.logger.info("🚀 Using 1-second candle processing")
             return self._run_efficient_1s_backtest(full_dataset, start_time, end_time, timeframe)
         else:
-            window_hours = 4  # 4-hour rolling windows
-            step_minutes = 5  # Step forward 5 minutes each iteration
-            step_duration = timedelta(minutes=step_minutes)
-            self.logger.info(f"📊 Regular mode: Using {window_hours}h windows with {step_minutes}m steps")
+            # Process every candle for other timeframes too
+            self.logger.info(f"📊 Processing every {timeframe} candle sequentially")
+            return self._run_sequential_backtest(full_dataset, start_time, end_time, timeframe)
         
         window_duration = timedelta(hours=window_hours)
         
@@ -527,16 +572,32 @@ class BacktestEngine:
         last_log_time = time.time()
         trades_count = 0
         
+        # Pre-create dataset structure to avoid recreation on every iteration
+        static_dataset_fields = {
+            'symbol': full_dataset.get('symbol'),
+            'timeframe': timeframe,
+            'markets': full_dataset.get('markets', {}),
+            'metadata': full_dataset.get('metadata', {})
+        }
+        
+        # Pre-fetch volume data if exists
+        spot_volume = full_dataset.get('spot_volume', pd.DataFrame())
+        futures_volume = full_dataset.get('futures_volume', pd.DataFrame())
+        
+        # Cache empty series for when CVD data is missing
+        empty_series = pd.Series(dtype=float)
+        empty_df = pd.DataFrame()
+        
         # Main processing loop - step through each second
         for current_index in range(start_index, end_index):
             iteration += 1
             current_time = ohlcv.index[current_index]
             
-            # Progress logging every 1000 iterations (1000 seconds = ~16 minutes)
-            if iteration % 1000 == 0:
+            # Progress logging every 5000 iterations (reduced frequency)
+            if iteration % 5000 == 0:
                 current_log_time = time.time()
                 elapsed = current_log_time - last_log_time
-                rate = 1000 / elapsed if elapsed > 0 else 0
+                rate = 5000 / elapsed if elapsed > 0 else 0
                 progress_pct = (iteration / total_iterations) * 100
                 
                 self.logger.info(
@@ -547,37 +608,37 @@ class BacktestEngine:
                 )
                 last_log_time = current_log_time
             
-            # Create windowed dataset using VIEWS (no copying!)
-            # Strategy needs different lookback periods
+            # Calculate lookback once
             lookback_30m = max(0, current_index - 1800)  # 30 minutes
-            lookback_15m = max(0, current_index - 900)   # 15 minutes
-            lookback_5m = max(0, current_index - 300)    # 5 minutes
             
-            # Create dataset for strategy (using views, not copies)
-            windowed_dataset = {
-                'symbol': full_dataset.get('symbol'),
-                'timeframe': timeframe,
+            # Skip if insufficient data (do this check BEFORE creating dataset)
+            if current_index - lookback_30m < 300:  # Need at least 5 minutes
+                continue
+            
+            # Create dataset for strategy (optimized - reuse static fields)
+            windowed_dataset = static_dataset_fields.copy()  # Shallow copy of static fields
+            windowed_dataset.update({
                 'start_time': ohlcv.index[lookback_30m],
                 'end_time': current_time,
-                'markets': full_dataset.get('markets', {}),
-                'metadata': full_dataset.get('metadata', {}),
                 # Use iloc for efficient slicing (creates views, not copies)
                 'ohlcv': ohlcv.iloc[lookback_30m:current_index + 1],
-                'spot_cvd': spot_cvd.iloc[lookback_30m:current_index + 1] if not spot_cvd.empty else pd.Series(),
-                'futures_cvd': futures_cvd.iloc[lookback_30m:current_index + 1] if not futures_cvd.empty else pd.Series(),
-                'cvd_divergence': cvd_divergence.iloc[lookback_30m:current_index + 1] if not cvd_divergence.empty else pd.Series(),
-                'spot_volume': full_dataset.get('spot_volume', pd.DataFrame()).iloc[lookback_30m:current_index + 1] if 'spot_volume' in full_dataset else pd.DataFrame(),
-                'futures_volume': full_dataset.get('futures_volume', pd.DataFrame()).iloc[lookback_30m:current_index + 1] if 'futures_volume' in full_dataset else pd.DataFrame()
-            }
-            
-            # Skip if insufficient data
-            if len(windowed_dataset['ohlcv']) < 300:  # Need at least 5 minutes
-                continue
+                'spot_cvd': spot_cvd.iloc[lookback_30m:current_index + 1] if not spot_cvd.empty else empty_series,
+                'futures_cvd': futures_cvd.iloc[lookback_30m:current_index + 1] if not futures_cvd.empty else empty_series,
+                'cvd_divergence': cvd_divergence.iloc[lookback_30m:current_index + 1] if not cvd_divergence.empty else empty_series,
+                'spot_volume': spot_volume.iloc[lookback_30m:current_index + 1] if not spot_volume.empty else empty_df,
+                'futures_volume': futures_volume.iloc[lookback_30m:current_index + 1] if not futures_volume.empty else empty_df
+            })
             
             # Get current portfolio state
             portfolio_state = self.portfolio.get_state()
             portfolio_state['available_leverage'] = self.leverage
             portfolio_state['current_time'] = current_time
+            
+            # Skip processing on most candles if no position (massive speedup)
+            # Only process every 60th candle (once per minute) when flat
+            has_position = bool(portfolio_state.get('positions', []))
+            if not has_position and iteration % 60 != 0:
+                continue
             
             # Process strategy
             try:
@@ -621,6 +682,141 @@ class BacktestEngine:
         self.logger.info(f"🎯 Efficient 1s backtest completed!")
         self.logger.info(f"📊 Processed: {total_iterations:,} time points")
         self.logger.info(f"⚡ Average speed: {avg_rate:.0f} points/second")
+        self.logger.info(f"📈 Total trades: {len(all_executed_orders)}")
+        self.logger.info(f"⏱️  Total time: {elapsed_total:.1f} seconds")
+        
+        return all_executed_orders
+    
+    def _run_sequential_backtest(self, full_dataset: Dict, start_time: datetime,
+                                 end_time: datetime, timeframe: str) -> List[Dict]:
+        """
+        Process backtest by stepping through each candle sequentially.
+        Works for all non-1s timeframes (1m, 5m, 15m, etc.)
+        
+        Args:
+            full_dataset: Complete dataset loaded from data pipeline
+            start_time: Backtest start time
+            end_time: Backtest end time
+            timeframe: Trading timeframe (e.g., '1m', '5m', '15m')
+            
+        Returns:
+            List of executed orders
+        """
+        # Get primary data
+        ohlcv = full_dataset.get('ohlcv', pd.DataFrame())
+        if ohlcv.empty:
+            self.logger.error("No OHLCV data available")
+            return []
+        
+        spot_cvd = full_dataset.get('spot_cvd', pd.Series())
+        futures_cvd = full_dataset.get('futures_cvd', pd.Series())
+        cvd_divergence = full_dataset.get('cvd_divergence', pd.Series())
+        
+        # Log data info
+        data_start = ohlcv.index[0]
+        data_end = ohlcv.index[-1]
+        self.logger.info(f"📈 Data range: {data_start} to {data_end}")
+        self.logger.info(f"📊 Total candles: {len(ohlcv):,}")
+        
+        # Find start and end indices
+        start_index = 0
+        for i, timestamp in enumerate(ohlcv.index):
+            if timestamp >= start_time:
+                start_index = i
+                break
+        
+        end_index = len(ohlcv)
+        for i, timestamp in enumerate(ohlcv.index):
+            if timestamp > end_time:
+                end_index = i
+                break
+        
+        total_candles = end_index - start_index
+        self.logger.info(f"🔄 Processing {total_candles:,} {timeframe} candles")
+        
+        all_executed_orders = []
+        iteration = 0
+        trades_count = 0
+        last_log_time = time.time()
+        
+        # Process each candle sequentially
+        for current_index in range(start_index, end_index):
+            iteration += 1
+            current_time = ohlcv.index[current_index]
+            
+            # Progress logging
+            log_interval = 100 if timeframe in ['1m', '5m'] else 50
+            if iteration % log_interval == 0 or iteration == total_candles:
+                elapsed = time.time() - last_log_time
+                rate = log_interval / elapsed if elapsed > 0 else 0
+                progress_pct = (iteration / total_candles) * 100
+                
+                self.logger.info(
+                    f"⚡ Progress: {iteration:,}/{total_candles:,} ({progress_pct:.1f}%) "
+                    f"- Time: {current_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"- Speed: {rate:.0f} candles/sec "
+                    f"- Trades: {trades_count}"
+                )
+                last_log_time = time.time()
+            
+            # Create dataset with all historical data up to current point
+            dataset_for_strategy = {
+                'symbol': full_dataset.get('symbol'),
+                'timeframe': timeframe,
+                'start_time': ohlcv.index[0],  # All historical data available
+                'end_time': current_time,
+                'markets': full_dataset.get('markets', {}),
+                'metadata': full_dataset.get('metadata', {}),
+                # Include ALL data up to current index (no artificial windowing!)
+                'ohlcv': ohlcv.iloc[:current_index + 1],
+                'spot_cvd': spot_cvd.iloc[:current_index + 1] if not spot_cvd.empty else pd.Series(),
+                'futures_cvd': futures_cvd.iloc[:current_index + 1] if not futures_cvd.empty else pd.Series(),
+                'cvd_divergence': cvd_divergence.iloc[:current_index + 1] if not cvd_divergence.empty else pd.Series(),
+                'spot_volume': full_dataset.get('spot_volume', pd.DataFrame()).iloc[:current_index + 1] if 'spot_volume' in full_dataset else pd.DataFrame(),
+                'futures_volume': full_dataset.get('futures_volume', pd.DataFrame()).iloc[:current_index + 1] if 'futures_volume' in full_dataset else pd.DataFrame()
+            }
+            
+            # Get current portfolio state
+            portfolio_state = self.portfolio.get_state()
+            portfolio_state['available_leverage'] = self.leverage
+            portfolio_state['current_time'] = current_time
+            
+            # Process strategy
+            try:
+                strategy_result = self.strategy.process(dataset_for_strategy, portfolio_state)
+                
+                # Process any generated orders
+                if strategy_result and 'orders' in strategy_result:
+                    orders = strategy_result['orders']
+                    if orders:
+                        for order in orders:
+                            order['timestamp'] = current_time
+                            
+                            executed = self._execute_order(order, dataset_for_strategy)
+                            if executed:
+                                all_executed_orders.append(executed)
+                                trades_count += 1
+                                
+                                signal_quality = order.get('signal_type', 'UNKNOWN')
+                                confidence = order.get('confidence', 0)
+                                self.logger.info(
+                                    f"✅ {current_time.strftime('%Y-%m-%d %H:%M:%S')} - "
+                                    f"{executed['side']} {executed.get('quantity', 0):.6f} "
+                                    f"@ ${executed.get('price', 0):,.2f} "
+                                    f"({signal_quality}, conf: {confidence:.1%})"
+                                )
+                
+            except Exception as e:
+                self.logger.error(f"Strategy processing error at {current_time}: {str(e)}")
+                continue
+        
+        # Final summary
+        elapsed_total = time.time() - (last_log_time - (iteration % log_interval) / (rate if 'rate' in locals() and rate > 0 else 1))
+        avg_rate = total_candles / elapsed_total if elapsed_total > 0 else 0
+        
+        self.logger.info(f"🎯 Sequential backtest completed!")
+        self.logger.info(f"📊 Processed: {total_candles:,} {timeframe} candles")
+        self.logger.info(f"⚡ Average speed: {avg_rate:.0f} candles/second")
         self.logger.info(f"📈 Total trades: {len(all_executed_orders)}")
         self.logger.info(f"⏱️  Total time: {elapsed_total:.1f} seconds")
         

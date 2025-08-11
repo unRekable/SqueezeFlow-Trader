@@ -72,11 +72,11 @@ class SignalValidator:
         # Validation rules configuration
         self.validation_rules = self._initialize_validation_rules()
         
-        # Rate limiting configuration
+        # Rate limiting configuration - removed cooldown for unlimited trading
         self.rate_limits = {
-            'max_signals_per_minute': config.get('max_signals_per_minute', 10),
-            'max_signals_per_symbol_per_hour': config.get('max_signals_per_symbol_per_hour', 5),
-            'cooldown_minutes': config.get('signal_cooldown_minutes', 15)
+            'max_signals_per_minute': config.get('max_signals_per_minute', 100),  # Increased for unlimited trading
+            'max_signals_per_symbol_per_hour': config.get('max_signals_per_symbol_per_hour', 100),  # Increased for unlimited trading
+            'cooldown_minutes': config.get('signal_cooldown_minutes', 0)  # No cooldown - trade when conditions are met
         }
         
         # Cleanup configuration

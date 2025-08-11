@@ -273,7 +273,7 @@ class ServiceConfig:
     redis_connection_pool_size = 20
     validation_cleanup_interval_hours = 12
     strategy_name = 'SqueezeFlowStrategy'
-    max_concurrent_signals = 5
+    max_concurrent_signals = 100  # Unlimited trading - no artificial constraints
     enable_cvd_baseline_tracking = True
     cvd_baseline_storage_key = 'cvd_baselines'
     enable_performance_monitoring = True

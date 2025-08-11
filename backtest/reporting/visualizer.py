@@ -1,53 +1,34 @@
-#!/usr/bin/env python3
 """
-Backtest Visualizer - Coordination for visualization system
-Coordinates HTML reporting and PNG chart generation
+Backtest Visualizer - Simple TradingView dashboard
+Using TradingView's native capabilities properly
 """
 
-from datetime import datetime
-from typing import Dict, List
+import logging
 from pathlib import Path
+from typing import Dict, List
 
-from .html_reporter import HTMLReporter
-from .png_plotter import PNGPlotter
+# Import TradingView visualizer for proper implementation
+from .tradingview_visualizer import TradingViewVisualizer
+
+logger = logging.getLogger(__name__)
 
 
 class BacktestVisualizer:
-    """Coordination layer for visualization system"""
+    """Simple, clean dashboard using TradingView properly"""
     
-    def __init__(self, output_dir: str = "backtest/results/charts"):
+    def __init__(self, output_dir: str = "backtest/results"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Use TradingView visualizer for proper implementation
+        self.tv = TradingViewVisualizer(output_dir)
         
-        # Initialize components
-        self.html_reporter = HTMLReporter()
-        self.png_plotter = PNGPlotter()
-    
     def create_backtest_report(self, results: Dict, dataset: Dict, 
                               executed_orders: List[Dict]) -> str:
-        """
-        Create comprehensive backtest report with visualizations
+        """Create TradingView dashboard"""
         
-        Args:
-            results: Backtest results
-            dataset: Market dataset
-            executed_orders: List of executed orders
-            
-        Returns:
-            Path to generated report
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_dir = self.output_dir / f"report_{timestamp}"
-        report_dir.mkdir(exist_ok=True)
+        # Use the TradingView visualizer
+        dashboard_path = self.tv.create_backtest_report(results, dataset, executed_orders)
         
-        # Generate PNG charts
-        charts = self.png_plotter.create_all_charts(
-            results, dataset, executed_orders, report_dir
-        )
+        logger.info(f"Dashboard created: {dashboard_path}")
         
-        # Generate HTML report
-        html_report = self.html_reporter.create_html_report(
-            results, dataset, executed_orders, charts, report_dir
-        )
-        
-        return str(html_report)
+        return dashboard_path

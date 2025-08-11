@@ -21,8 +21,8 @@ class BacktestLogger:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create timestamp for this session
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Don't add another timestamp since the directory already has one
+        self.session_id = ""
         
         # Setup loggers
         self._setup_main_logger()
@@ -43,7 +43,7 @@ class BacktestLogger:
         self.main_logger.handlers.clear()
         
         # File handler with rotation
-        log_file = self.log_dir / f"backtest_{self.session_id}.log"
+        log_file = self.log_dir / "backtest.log"
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
             maxBytes=10*1024*1024,  # 10MB
@@ -68,7 +68,7 @@ class BacktestLogger:
     
     def _setup_trade_logger(self):
         """Setup trade execution logger"""
-        trades_file = self.log_dir / f"trades_{self.session_id}.csv"
+        trades_file = self.log_dir / "trades.csv"
         self.trades_file = open(trades_file, 'w', newline='')
         self.trades_writer = csv.writer(self.trades_file)
         
@@ -81,7 +81,7 @@ class BacktestLogger:
     
     def _setup_signal_logger(self):
         """Setup signal analysis logger"""
-        signals_file = self.log_dir / f"signals_{self.session_id}.csv"
+        signals_file = self.log_dir / "signals.csv"
         self.signals_file = open(signals_file, 'w', newline='')
         self.signals_writer = csv.writer(self.signals_file)
         
@@ -202,7 +202,7 @@ class BacktestLogger:
     def save_session_summary(self, results: Dict):
         """Save complete session summary to JSON"""
         try:
-            summary_file = self.log_dir / f"summary_{self.session_id}.json"
+            summary_file = self.log_dir / "summary.json"
             
             summary = {
                 'session_id': self.session_id,

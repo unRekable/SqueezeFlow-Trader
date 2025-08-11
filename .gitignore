@@ -414,7 +414,7 @@ freqtrade/user_data/freqai_data/
 
 # SqueezeFlow specific generated files
 data/session_summaries/
-data/session_stats/
+data/session_stats/t
 *_performance_results.json
 *_analysis_results.json
 *_optimization.json

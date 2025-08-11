@@ -15,11 +15,31 @@ from .loaders.market_discovery import MarketDiscovery
 from .processors.exchange_mapper import ExchangeMapper
 from .processors.cvd_calculator import CVDCalculator
 
+# Simple config to disable problematic indicators (mainly OI)
+try:
+    from backtest.indicator_config import get_indicator_config
+except ImportError:
+    # Fallback - everything enabled except OI
+    class IndicatorConfig:
+        enable_spot_cvd = True
+        enable_futures_cvd = True
+        enable_cvd_divergence = True
+        enable_open_interest = False  # No data available
+        enable_spot_volume = True
+        enable_futures_volume = True
+    
+    def get_indicator_config():
+        return IndicatorConfig()
+
+
 
 class DataPipeline:
     """Unified data pipeline for SqueezeFlow Trader"""
     
     def __init__(self):
+        # Get config for disabling problematic indicators
+        self.config = get_indicator_config()
+        
         # Initialize components
         # Smart host detection for InfluxDB connection issues
         import os
@@ -244,7 +264,7 @@ class DataPipeline:
     def calculate_cvd_data(self, spot_df: pd.DataFrame, 
                           futures_df: pd.DataFrame) -> Dict[str, pd.Series]:
         """
-        Calculate CVD data from volume dataframes
+        Calculate CVD data from volume dataframes (respects config)
         
         Args:
             spot_df: Spot volume dataframe
@@ -259,17 +279,19 @@ class DataPipeline:
             'cvd_divergence': pd.Series(dtype=float)
         }
         
-        # Fill NaN values with 0 before CVD calculation
-        if not spot_df.empty:
+        # Only calculate if enabled
+        if self.config.enable_spot_cvd and not spot_df.empty:
             spot_df = spot_df.fillna(0)
             result['spot_cvd'] = self.cvd_calculator.calculate_spot_cvd(spot_df)
         
-        if not futures_df.empty:
+        if self.config.enable_futures_cvd and not futures_df.empty:
             futures_df = futures_df.fillna(0)
             result['futures_cvd'] = self.cvd_calculator.calculate_futures_cvd(futures_df)
         
-        # Calculate divergence
-        if not result['spot_cvd'].empty and not result['futures_cvd'].empty:
+        # Only calculate divergence if enabled and both CVDs exist
+        if (self.config.enable_cvd_divergence and 
+            not result['spot_cvd'].empty and 
+            not result['futures_cvd'].empty):
             result['cvd_divergence'] = self.cvd_calculator.calculate_cvd_divergence(
                 result['spot_cvd'], result['futures_cvd']
             )

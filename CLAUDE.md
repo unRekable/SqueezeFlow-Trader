@@ -1,5 +1,142 @@
 # SqueezeFlow Trader - Project Instructions
 
+## 🚨 ABSOLUTE PRIORITY #0: ALWAYS CHECK DOCUMENTATION FIRST!!!
+**THIS IS THE MOST CRITICAL RULE - NEVER SKIP THIS:**
+1. **ALWAYS read SYSTEM_TRUTH.md FIRST** - Contains what actually works vs what's broken
+2. **ALWAYS check README.md** - May contain critical updates or configuration changes  
+3. **ALWAYS review CLAUDE.md (this file)** - For project-specific instructions
+4. **ALWAYS check DASHBOARD_PROGRESS.md** - For current dashboard implementation status
+5. **ALWAYS check relevant docs in /docs/** - For component-specific details
+6. **NEVER attempt ANY task without checking docs FIRST**
+7. **NEVER assume you remember - ALWAYS verify from documentation**
+
+**If you skip documentation checks, you WILL fail. This is non-negotiable.**
+
+## 📈 SELF-IMPROVEMENT & LEARNING FRAMEWORK
+**Claude learns and improves through structured feedback:**
+
+### Progress Tracking Files (ALWAYS UPDATE THESE):
+- **DASHBOARD_PROGRESS.md** - Track dashboard implementation status
+- **SYSTEM_TRUTH.md** - Document what works vs what's broken
+- **LESSONS_LEARNED.md** - Record mistakes and solutions for future reference
+
+### After Each Task:
+1. **Document what worked** in the appropriate tracking file
+2. **Document what failed** and why
+3. **Update progress status** with specific details
+4. **Add lessons learned** to prevent repeated mistakes
+
+### Self-Validation Loop:
+1. **Execute** → 2. **Validate** → 3. **Document** → 4. **Learn**
+- Never skip validation
+- Always document findings
+- Update tracking files immediately
+
+## 🔍 VISUAL VALIDATION - MANDATORY FOR ALL DASHBOARDS
+**After generating ANY dashboard or visualization:**
+1. **ALWAYS run visual validation** to see what was actually generated
+2. **Use the visual_validator.py** to analyze and screenshot dashboards
+3. **Read the screenshot** to verify charts are populated
+4. **Check validation report** for issues and recommendations
+
+```bash
+# After any backtest with visualization:
+cd "/Users/u/PycharmProjects/SqueezeFlow Trader"
+python3 backtest/reporting/visual_validator.py
+
+# Then read the screenshot to see actual output:
+# Read tool: backtest/results/report_*/dashboard_screenshot_*.png
+```
+
+**This allows Claude to self-debug by seeing exactly what the user sees!**
+**Essential for the optimization framework to improve the system.**
+
+## 🔴 CRITICAL ARCHITECTURAL RULE: Single Source of Truth
+**When making ANY configuration or behavior change:**
+1. **ALWAYS use centralized configuration** (`/backtest/indicator_config.py`)
+2. **NEVER hardcode the same logic in multiple files**
+3. **ALWAYS make components read from config, not duplicate logic**
+4. **ALWAYS check and update ALL dependent components**
+5. **See `.claude/ARCHITECTURAL_PRINCIPLES.md` for detailed patterns**
+
+**Example: OI disable required changes in 5+ files. Should have been 1 config change.**
+
+## 🔴 CRITICAL: Implementation Process - MANDATORY WORKFLOW
+
+**STEP 1: SEARCH** (Before ANY changes)
+```bash
+grep -r "feature_name" .  # Find ALL references
+grep -r "oi_data\|open_interest\|OI" strategies/ backtest/ data/  # Example for OI
+```
+
+**STEP 2: IMPLEMENT** (Change ALL files found)
+- Update EVERY file that references the feature
+- Make them ALL use central config
+- Don't leave any hardcoded versions
+
+**STEP 3: VERIFY** (Test it actually works)
+```bash
+python3 -c "from module import thing; print(thing.works())"  # Quick test
+python3 test_integration.py  # Full test
+```
+
+**STEP 4: DOCUMENT** (Only AFTER it works)
+- Update relevant .md files
+- Add to IMPLEMENTATION_CHECKLIST.md
+- Document what was ACTUALLY done, not planned
+
+**FAILURE MODE TO AVOID:**
+The OI disable took hours because I:
+1. Created documentation about how it should work ❌
+2. Made example files showing the pattern ❌
+3. But didn't actually update the code to use it ❌
+4. You had to tell me to check if I actually DID it ❌
+
+**SUCCESS MODE:**
+1. grep for ALL occurrences ✅
+2. Update ALL files to use config ✅
+3. Test that it works ✅
+4. THEN document ✅
+
+## 🔴 CRITICAL BACKTEST RULES - NEVER VIOLATE THESE
+
+### RULE #1: ALWAYS Check Available Data First
+```python
+# MANDATORY FIRST STEP - Check what data actually exists:
+cd "/Users/u/PycharmProjects/SqueezeFlow Trader" && python3 -c "
+from influxdb import InfluxDBClient
+client = InfluxDBClient(host='213.136.75.120', port=8086, database='significant_trades')
+result = client.query(\"SELECT * FROM aggr_1s.trades_1s WHERE market = 'BINANCE:btcusdt' ORDER BY time DESC LIMIT 1\")
+for point in result.get_points():
+    print(f'Latest data: {point.get(\"time\")}')
+result = client.query(\"SELECT * FROM aggr_1s.trades_1s WHERE market = 'BINANCE:btcusdt' ORDER BY time ASC LIMIT 1\")
+for point in result.get_points():
+    print(f'Earliest data: {point.get(\"time\")}')"
+```
+
+### RULE #2: ALWAYS Use Full Available Data Range
+```bash
+# WRONG - Never use arbitrary dates without checking:
+python3 backtest/engine.py --start-date 2025-08-09 --end-date 2025-08-10  # DON'T DO THIS!
+
+# RIGHT - Use the ACTUAL available data range:
+# If data shows: 2025-08-10 00:00 to 2025-08-10 23:59
+python3 backtest/engine.py --start-date 2025-08-10 --end-date 2025-08-10
+```
+
+### RULE #3: Sequential Processing Requirement
+- Backtest processes EVERY candle sequentially (real-time simulation)
+- Strategy has access to ALL historical data up to current point
+- No artificial windowing or stepping - matches live trading exactly
+
+### VIOLATION CONSEQUENCES:
+- "Insufficient historical data for analysis" error
+- Wasted time and resources
+- User frustration
+- Failed backtests
+
+**CHECK THESE RULES BEFORE EVERY BACKTEST - NO EXCEPTIONS!**
+
 ## ⚠️ CRITICAL: Read SYSTEM_TRUTH.md First!
 **Before doing ANYTHING, read `/SYSTEM_TRUTH.md` for what actually works and what's broken.**
 
@@ -252,16 +389,99 @@ docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM aggr_1s.trades_1s"
 
 ### 📊 Data Location and Retention Issues
 
-**Finding Your Data:**
+**⚠️ CRITICAL ANTI-PATTERN: Local vs Remote InfluxDB**
+- **NEVER** use local Docker InfluxDB (aggr-influx) for backtesting - it only has test data!
+- **ALWAYS** use remote production InfluxDB server for real market data
+- **Local aggr-influx**: Only for local testing and development (no real data)
+- **Remote InfluxDB**: Contains all real market data for backtesting and live trading
+
+**🎯 MANDATORY BACKTEST CONFIGURATION:**
+```bash
+# ALWAYS use these settings for ALL crypto pairs (BTC, ETH, AVAX, etc.):
+export INFLUX_HOST=213.136.75.120  # Remote production server IP (NEVER use local)
+export INFLUX_PORT=8086
+export TIMEFRAME=1s  # ALWAYS use 1-second data (system default)
+
+# Standard backtest command for ANY crypto pair:
+INFLUX_HOST=213.136.75.120 python3 backtest/engine.py --symbol AVAX --start-date 2025-08-08 --end-date 2025-08-10 --timeframe 1s --balance 10000 --leverage 1.0 --strategy SqueezeFlowStrategy
+
+# Examples for different pairs (ALL use 1s data):
+# BTC:
+INFLUX_HOST=213.136.75.120 python3 backtest/engine.py --symbol BTC --timeframe 1s --start-date 2025-08-08 --end-date 2025-08-10
+
+# ETH:
+INFLUX_HOST=213.136.75.120 python3 backtest/engine.py --symbol ETH --timeframe 1s --start-date 2025-08-08 --end-date 2025-08-10
+
+# AVAX:
+INFLUX_HOST=213.136.75.120 python3 backtest/engine.py --symbol AVAX --timeframe 1s --start-date 2025-08-08 --end-date 2025-08-10
+
+# WRONG - This uses local Docker with no real data:
+docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM trades_1s"
+
+# RIGHT - Connect to remote server for real data:
+influx -host your_server_ip -execute "SELECT COUNT(*) FROM trades_1s" -database significant_trades
+```
+
+**Finding Your Data (on REMOTE server):**
 ```bash
 # 1-second data is in aggr_1s retention policy
-docker exec aggr-influx influx -execute "SELECT COUNT(*) FROM aggr_1s.trades_1s" -database significant_trades
+influx -host your_server_ip -execute "SELECT COUNT(*) FROM aggr_1s.trades_1s" -database significant_trades
 
 # Check all retention policies
-docker exec aggr-influx influx -execute "SHOW RETENTION POLICIES ON significant_trades"
+influx -host your_server_ip -execute "SHOW RETENTION POLICIES ON significant_trades"
 
 # Find data range available for backtesting
-docker exec aggr-influx influx -execute "SELECT MIN(time), MAX(time) FROM aggr_1s.trades_1s" -database significant_trades
+influx -host your_server_ip -execute "SELECT MIN(time), MAX(time) FROM aggr_1s.trades_1s" -database significant_trades
+
+# Check Open Interest data availability
+influx -host your_server_ip -execute "SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='TOTAL_AGG' ORDER BY time DESC LIMIT 5" -database significant_trades
+```
+
+### 📈 Open Interest (OI) Data Integration
+
+**IMPORTANT: OI Data Source Configuration**
+- **Production Server**: OI tracker runs on server, writes to remote InfluxDB
+- **Local Development**: Strategies read OI from same remote InfluxDB (not local APIs)
+- **Data Flow**: Server collects OI → Remote InfluxDB → Local strategies read from remote
+
+**OI Data Structure in InfluxDB:**
+```bash
+# Individual exchange OI
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='BINANCE_FUTURES'
+
+# Top 3 futures combined (BINANCE + BYBIT + OKX)
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='FUTURES_AGG'
+
+# All exchanges combined (includes DERIBIT options)
+SELECT * FROM open_interest WHERE symbol='BTC' AND exchange='TOTAL_AGG'
+```
+
+**Using OI Data in Strategies:**
+```python
+# Use InfluxDB-based OI tracker (not direct API calls)
+from strategies.squeezeflow.components.oi_tracker_influx import OITrackerInflux
+
+# Initialize with remote InfluxDB connection
+tracker = OITrackerInflux(rise_threshold=5.0)
+
+# Get OI metrics from remote server
+oi_data = tracker.get_oi_change_sync('BTC')
+
+# Validate squeeze with OI confirmation
+is_valid, reason = tracker.validate_squeeze_with_oi('BTC', squeeze_detected=True)
+```
+
+**Testing OI Remote Access:**
+```bash
+# Test OI data retrieval from remote server
+INFLUX_HOST=your_server_ip python test_oi_remote.py
+
+# Verify OI data flow
+python -c "
+from strategies.squeezeflow.components.oi_tracker_influx import OITrackerInflux
+tracker = OITrackerInflux()
+print(tracker.get_oi_change_sync('BTC'))
+"
 ```
 
 **Retention Policy Limits:**
@@ -269,6 +489,32 @@ docker exec aggr-influx influx -execute "SELECT MIN(time), MAX(time) FROM aggr_1
 - Data older than 7 days is automatically deleted
 - Plan backtests within the retention window
 - For longer backtests, consider using higher timeframes (5m, 15m)
+
+### ⚠️ CRITICAL: Backtest "Insufficient Historical Data" Error
+
+**Root Cause:** Requesting data outside the available date range.
+
+**The Problem:**
+```bash
+# This will FAIL if data doesn't exist for these dates
+python3 backtest/engine.py --start-date 2025-08-09 --end-date 2025-08-10
+# Why: Data might only exist from 2025-08-10 onward
+```
+
+**The Solution:**
+```bash
+# First, check what data is actually available
+influx -host 213.136.75.120 -execute "SELECT MIN(time), MAX(time) FROM trades_1s WHERE market='BINANCE:btcusdt'" -database significant_trades
+
+# Then use dates WITHIN the available range
+python3 backtest/engine.py --start-date 2025-08-10 --end-date 2025-08-10
+# This works because data exists for Aug 10
+```
+
+**Quick Fix Checklist:**
+1. Check available data range first
+2. Use dates within the available range
+3. Don't request dates before data exists
 
 ## 🚫 Anti-Patterns to Avoid
 

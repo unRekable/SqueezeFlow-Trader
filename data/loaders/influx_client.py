@@ -1013,6 +1013,134 @@ class OptimizedInfluxClient:
         
         return combined_ohlcv_df, combined_volume_df
     
+    def get_oi_data(self, symbol: str, start_time: datetime, end_time: datetime, 
+                    exchange: str = 'TOTAL_AGG', timeframe: str = '5m') -> pd.DataFrame:
+        """
+        Get Open Interest data from InfluxDB
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH')
+            start_time: Start datetime
+            end_time: End datetime
+            exchange: Exchange or aggregation type ('TOTAL_AGG', 'FUTURES_AGG', 'BINANCE_FUTURES', etc.)
+            timeframe: Aggregation timeframe (1m, 5m, 15m, etc.)
+            
+        Returns:
+            DataFrame with OI data
+        """
+        try:
+            # Format timestamps
+            start_ts = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            end_ts = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
+            # Build query based on timeframe
+            if timeframe == 'raw':
+                # Get raw data points
+                query = f"""
+                SELECT 
+                    open_interest_usd as oi_usd,
+                    open_interest_coin as oi_coin
+                FROM open_interest 
+                WHERE symbol = '{symbol}' 
+                    AND exchange = '{exchange}'
+                    AND time >= '{start_ts}'
+                    AND time <= '{end_ts}'
+                ORDER BY time DESC
+                """
+            else:
+                # Aggregate by timeframe
+                query = f"""
+                SELECT 
+                    mean(open_interest_usd) as oi_usd,
+                    mean(open_interest_coin) as oi_coin,
+                    max(open_interest_usd) as oi_usd_max,
+                    min(open_interest_usd) as oi_usd_min
+                FROM open_interest 
+                WHERE symbol = '{symbol}' 
+                    AND exchange = '{exchange}'
+                    AND time >= '{start_ts}'
+                    AND time <= '{end_ts}'
+                GROUP BY time({timeframe})
+                ORDER BY time DESC
+                """
+            
+            result = self.client.query(query)
+            
+            if result:
+                df = pd.DataFrame(list(result.get_points()))
+                if not df.empty:
+                    df['time'] = pd.to_datetime(df['time'])
+                    df.set_index('time', inplace=True)
+                    return df
+            
+            return pd.DataFrame()
+            
+        except Exception as e:
+            logger.error(f"Error fetching OI data: {e}")
+            return pd.DataFrame()
+    
+    def get_oi_by_exchanges(self, symbol: str, start_time: datetime, end_time: datetime,
+                            timeframe: str = '5m') -> Dict[str, pd.DataFrame]:
+        """
+        Get OI data for multiple exchanges
+        
+        Args:
+            symbol: Trading symbol
+            start_time: Start datetime
+            end_time: End datetime
+            timeframe: Aggregation timeframe
+            
+        Returns:
+            Dict mapping exchange names to DataFrames
+        """
+        exchanges_data = {}
+        
+        # List of exchanges to query
+        exchanges = ['BINANCE_FUTURES', 'BYBIT', 'OKX', 'DERIBIT', 'FUTURES_AGG', 'TOTAL_AGG']
+        
+        for exchange in exchanges:
+            df = self.get_oi_data(symbol, start_time, end_time, exchange, timeframe)
+            if not df.empty:
+                exchanges_data[exchange] = df
+        
+        return exchanges_data
+    
+    def get_latest_oi(self, symbol: str, exchange: str = 'TOTAL_AGG') -> Optional[Dict]:
+        """
+        Get the latest OI data point
+        
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange or aggregation type
+            
+        Returns:
+            Dict with latest OI data or None
+        """
+        try:
+            query = f"""
+            SELECT 
+                open_interest_usd as oi_usd,
+                open_interest_coin as oi_coin
+            FROM open_interest 
+            WHERE symbol = '{symbol}' 
+                AND exchange = '{exchange}'
+            ORDER BY time DESC
+            LIMIT 1
+            """
+            
+            result = self.client.query(query)
+            
+            if result:
+                points = list(result.get_points())
+                if points:
+                    return points[0]
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching latest OI: {e}")
+            return None
+    
     def close(self):
         """Close all connections and cleanup"""
         try:

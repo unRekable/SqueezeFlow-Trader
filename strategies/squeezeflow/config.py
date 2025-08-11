@@ -66,8 +66,9 @@ class SqueezeFlowConfig:
     })
     
     # Entry Requirements (from SqueezeFlow.md line 180: minimum 4 points)
-    # FIXED: Lowered to 4.0 for realistic trading (was incorrectly raised to 7.0)
-    min_entry_score: float = 4.0  # Minimum score for entry signal generation (realistic threshold)
+    # PERFORMANCE FIX: Raised to 6.0 to reduce excessive trading frequency (272 trades/day is too much)
+    # This ensures only HIGH quality signals (6+) trigger trades, reducing overhead
+    min_entry_score: float = 6.0  # Increased from 4.0 to reduce trading frequency
     
     # Position Sizing by Score (from SqueezeFlow.md lines 180-183)
     position_size_by_score: Dict[str, float] = field(default_factory=lambda: {

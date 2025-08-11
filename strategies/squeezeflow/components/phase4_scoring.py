@@ -14,6 +14,16 @@ from datetime import datetime
 import pytz
 import os
 
+# Import configuration to check what's enabled
+try:
+    from backtest.indicator_config import get_indicator_config
+except ImportError:
+    # Fallback if running outside backtest
+    class DefaultConfig:
+        enable_open_interest = False
+    def get_indicator_config():
+        return DefaultConfig()
+
 
 class ScoringSystem:
     """
@@ -134,24 +144,32 @@ class ScoringSystem:
                 ohlcv, spot_cvd, futures_cvd, context
             )
             
-            # 5. OI Confirmation Bonus (up to 2.0 points bonus, -1.0 penalty)
-            # This is CRITICAL for squeeze validation
-            oi_confirmed = divergence.get('oi_confirmed', False)
-            oi_data = divergence.get('oi_data', {})
+            # 5. OI Confirmation Bonus - Check config
+            config = get_indicator_config()
             
-            if oi_data:  # Only score if OI data is available
-                if oi_confirmed:
-                    # Strong OI rise = strong squeeze confirmation
-                    oi_change = oi_data.get('change_pct', 0)
-                    if oi_change >= 10.0:  # Very strong OI rise
-                        scores['oi_confirmation'] = 2.0
-                    elif oi_change >= 5.0:  # Good OI rise
-                        scores['oi_confirmation'] = 1.5
-                    else:  # Minimal OI rise
-                        scores['oi_confirmation'] = 0.5
+            if config.enable_open_interest:
+                # Use OI if enabled
+                oi_confirmed = divergence.get('oi_confirmed', False)
+                oi_data = divergence.get('oi_data', {})
+                
+                if oi_data:  # Only score if OI data is available
+                    if oi_confirmed:
+                        # Strong OI rise = strong squeeze confirmation
+                        oi_change = oi_data.get('change_pct', 0)
+                        if oi_change >= 10.0:  # Very strong OI rise
+                            scores['oi_confirmation'] = 2.0
+                        elif oi_change >= 5.0:  # Good OI rise
+                            scores['oi_confirmation'] = 1.5
+                        else:  # Minimal OI rise
+                            scores['oi_confirmation'] = 0.5
+                    else:
+                        # No OI confirmation - penalize the score
+                        scores['oi_confirmation'] = -1.0  # Penalty for no OI rise
                 else:
-                    # No OI confirmation - penalize the score
-                    scores['oi_confirmation'] = -1.0  # Penalty for no OI rise
+                    scores['oi_confirmation'] = 0  # No data available
+            else:
+                # OI disabled in config - neutral score
+                scores['oi_confirmation'] = 0
             
             # Apply reset bonus: if reset detected, multiply total score by 1.5
             if reset_detected:
