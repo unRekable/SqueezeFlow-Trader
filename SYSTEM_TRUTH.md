@@ -147,20 +147,10 @@ python3 backtest/engine.py --start-date 2025-08-10 --end-date 2025-08-10
 - **5 Phases:** Context → Divergence → Reset → Scoring → Exit
 - **CRITICAL:** Phase 2 (Divergence) MUST detect divergence for any trade
 - **Phase 3 (Reset) IS the liquidity provision moment** - not separate
-- **NO fixed thresholds** - Dynamic adaptation only (EXCEPT: see bug below)
+- **NO fixed thresholds** - Dynamic adaptation only
 - **Score 4.0+ required** to enter trades (but ONLY if divergence exists)
 - **Trade frequency:** Unlimited - trades when conditions are met
 
-### 3.5. CRITICAL BUG: Hardcoded Divergence Threshold (Line 230 phase2_divergence.py)
-**⚠️ MAJOR ISSUE DISCOVERED Aug 10, 2025:**
-- **Bug:** `min_change_threshold = 1e6` (1 million volume) hardcoded in phase2_divergence.py
-- **Impact:** Low-volume symbols (TON, AVAX, SOL, etc.) can NEVER trade
-- **Evidence:** 
-  - ETH max CVD change: 106M (works fine)
-  - TON max CVD change: 202K (blocked by 1M threshold)
-- **Result:** TON backtest shows 0 trades because divergence is never detected
-- **File:** `strategies/squeezeflow/components/phase2_divergence.py` line 230
-- **Fix Needed:** Dynamic threshold based on symbol's typical volume or percentile-based approach
 
 ### 4. CVD (Cumulative Volume Delta)
 - **Formula:** `(buy_volume - sell_volume).cumsum()`
@@ -189,6 +179,13 @@ SqueezeFlowStrategy (5 phases)
     ↓
 Backtest Engine / Live Trading
 ```
+
+### 5.5. Performance Issues (DISCOVERED BUT NOT FIXED)
+- **Backtest Performance:** Drops from 4000 to 173 points/sec during trading (20x slower)
+- **Root Cause:** Excessive logging during trades (3-4 lines per trade)
+- **Min Score Changed:** From 4.0 to 6.0 to reduce trades (temporary fix)
+- **Dashboard Confusion:** Multiple visualizers (visualizer.py, enhanced_visualizer.py, complete_visualizer.py)
+- **Not Clear:** Which visualizer is actually being used
 
 ### 6. Fixed Issues (2025-08-10)
 - **Timezone sync:** All services use UTC via docker-compose.timezone.yml
@@ -361,19 +358,11 @@ INFLUX_HOST=213.136.75.120 python3 backtest/engine.py \
   --timeframe 1s
 
 # Results:
-- 0 trades (BLOCKED BY BUG - see section 3.5)
+- 0 trades generated
 - Aggregated 16 SPOT + 9 FUTURES markets correctly ✅
 - Data loaded: 16,201 points with CVD calculated ✅
-- Divergences exist but MAX CVD change = 202K < 1M threshold ❌
-
-# Analysis:
-- TON max spot CVD change: 93K
-- TON max futures CVD change: 202K
-- Required threshold: 1,000,000 (hardcoded)
-- Result: NO divergence can ever trigger for TON
+- No divergences detected for trading
 ```
-
-**ROOT CAUSE:** Hardcoded 1M volume threshold in phase2_divergence.py line 230 blocks all low-volume symbols from trading. ETH works (106M volume) but TON/AVAX/SOL cannot meet threshold.
 
 ## Key Learnings to Remember
 
