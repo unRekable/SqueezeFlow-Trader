@@ -452,10 +452,6 @@ class TradingViewProperPanes:
                         type: 'volume',
                         precision: 2,
                     }},
-                    scaleMargins: {{
-                        top: 0.8,  // Push to bottom 20% for better separation
-                        bottom: 0.02,  // Small margin at bottom
-                    }},
                     lastValueVisible: false,  // Don't show last value on scale
                     priceLineVisible: false,  // Don't show price line
                 }});
@@ -467,56 +463,58 @@ class TradingViewProperPanes:
                         type: 'volume',
                         precision: 2,
                     }},
-                    scaleMargins: {{
-                        top: 0.8,  // Push to bottom 20% for better separation
-                        bottom: 0.02,  // Small margin at bottom
-                    }},
                     lastValueVisible: false,  // Don't show last value on scale
                     priceLineVisible: false,  // Don't show price line
                 }});
             }}
             
-            // Add CVD series (left scale for visual separation)
-            chart.applyOptions({{
-                leftPriceScale: {{
-                    visible: true,
-                    borderColor: '#2a2e39',
-                    scaleMargins: {{
-                        top: 0.4,
-                        bottom: 0.3,
-                    }},
+            // Configure volume scale margins AFTER creating the series
+            volumeSeries.priceScale().applyOptions({{
+                scaleMargins: {{
+                    top: 0.8,  // Push to bottom 20%
+                    bottom: 0,
                 }},
-            }});
+            }})
+            
+            // Remove left scale configuration - we'll use custom price scale IDs instead
             
             if (typeof chart.addSeries === 'function' && typeof LightweightCharts.LineSeries !== 'undefined') {{
                 spotCvdSeries = chart.addSeries(LightweightCharts.LineSeries, {{
                     color: '#2962ff',
                     lineWidth: 2,
-                    priceScaleId: 'left',
+                    priceScaleId: 'cvd',
                     title: 'Spot CVD',
                 }});
                 
                 futuresCvdSeries = chart.addSeries(LightweightCharts.LineSeries, {{
                     color: '#ff9800',
                     lineWidth: 2,
-                    priceScaleId: 'left',
+                    priceScaleId: 'cvd',
                     title: 'Futures CVD',
                 }});
             }} else {{
                 spotCvdSeries = chart.addLineSeries({{
                     color: '#2962ff',
                     lineWidth: 2,
-                    priceScaleId: 'left',
+                    priceScaleId: 'cvd',
                     title: 'Spot CVD',
                 }});
                 
                 futuresCvdSeries = chart.addLineSeries({{
                     color: '#ff9800',
                     lineWidth: 2,
-                    priceScaleId: 'left',
+                    priceScaleId: 'cvd',
                     title: 'Futures CVD',
                 }});
             }}
+            
+            // Configure CVD scale margins AFTER creating the series
+            spotCvdSeries.priceScale().applyOptions({{
+                scaleMargins: {{
+                    top: 0.4,  // Middle 30% of chart
+                    bottom: 0.3,
+                }},
+            }})
             
             // Add strategy score series (overlay scale with margins)
             if (typeof chart.addSeries === 'function' && typeof LightweightCharts.LineSeries !== 'undefined') {{
@@ -525,10 +523,6 @@ class TradingViewProperPanes:
                     lineWidth: 2,
                     title: 'Strategy Score',
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
                 
                 minEntryLine = chart.addSeries(LightweightCharts.LineSeries, {{
@@ -536,10 +530,6 @@ class TradingViewProperPanes:
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
                 
                 goodEntryLine = chart.addSeries(LightweightCharts.LineSeries, {{
@@ -547,10 +537,6 @@ class TradingViewProperPanes:
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
             }} else {{
                 scoreSeries = chart.addLineSeries({{
@@ -558,21 +544,22 @@ class TradingViewProperPanes:
                     lineWidth: 2,
                     title: 'Strategy Score',
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
+            }}
+            
+            // Configure score scale margins AFTER creating the series
+            scoreSeries.priceScale().applyOptions({{
+                scaleMargins: {{
+                    top: 0.85,  // Bottom 15% of chart
+                    bottom: 0,
+                }},
+            }});
                 
                 minEntryLine = chart.addLineSeries({{
                     color: 'rgba(255, 255, 255, 0.2)',
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
                 
                 goodEntryLine = chart.addLineSeries({{
@@ -580,10 +567,6 @@ class TradingViewProperPanes:
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     priceScaleId: 'score',
-                    scaleMargins: {{
-                        top: 0.8,
-                        bottom: 0.05,
-                    }},
                 }});
             }}
             

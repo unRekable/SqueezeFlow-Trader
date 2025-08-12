@@ -8,8 +8,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
 
-# Import TradingView PROPER implementation - ONE chart, multiple scales
-from .tradingview_proper_panes import TradingViewProperPanes
+# Import TRUE separate panes implementation - REAL visual separation
+from .true_separate_panes import TrueSeparatePanes
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,10 @@ class BacktestVisualizer:
         if isinstance(results, dict) and 'executed_orders' not in results:
             results['executed_orders'] = executed_orders
         
-        # Create the dashboard with PROPER implementation
-        tv_viz = TradingViewProperPanes()
+        # Create the dashboard with TRUE separate panes
+        tv_viz = TrueSeparatePanes()
         dashboard_path = tv_viz.create_dashboard(results, dataset, str(self.output_dir))
         
-        logger.info(f"✅ TradingView PROPER multi-pane dashboard created: {dashboard_path}")
+        logger.info(f"✅ TRUE separate panes dashboard created: {dashboard_path}")
         
         return dashboard_path
