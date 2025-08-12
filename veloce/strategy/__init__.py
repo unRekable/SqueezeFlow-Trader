@@ -1,0 +1,1 @@
+"""Strategy module for Veloce system"""

@@ -3,6 +3,192 @@
 **Created:** 2025-08-12
 **Purpose:** Document recurring issues and their solutions to prevent repetition
 
+## 🚨 RECURRING DASHBOARD ISSUES
+
+### The Chart API Version Mismatch (CRITICAL - FIXED 2025-08-12 14:02)
+**What Keeps Breaking:** Charts appear empty because `addCandlestickSeries` doesn't exist
+**Root Cause:** TradingView Lightweight Charts v4 changed the API
+**The Pattern That Breaks EVERY TIME:**
+```javascript
+// OLD API (v3) - This is what we keep writing but DOESN'T WORK
+priceSeries = priceChart.addCandlestickSeries(options);
+```
+
+**THE FIX THAT ACTUALLY WORKS:**
+```javascript
+// NEW API (v4) - Check for API version and use correct method
+if (typeof priceChart.addSeries === 'function' && typeof LightweightCharts.CandlestickSeries !== 'undefined') {
+    // NEW API (v4+) 
+    priceSeries = priceChart.addSeries(LightweightCharts.CandlestickSeries, options);
+} else {
+    // OLD API (v3) fallback
+    priceSeries = priceChart.addCandlestickSeries(options);
+}
+```
+
+**CRITICAL LESSON:** ALWAYS check API version and provide fallback for both v3 and v4!
+
+### The Multiple Charts Anti-Pattern (CRITICAL - FIXED 2025-08-12 14:18, ENHANCED 2025-08-12 14:32)
+**What Happened:** Created 4 separate chart instances trying to make "panes"
+**Why It Failed:** 
+1. Each chart has its own time axis, impossible to truly sync
+2. Data gets truncated to different ranges per chart
+3. Indicators don't align with price data
+
+**THE PATTERN THAT ACTUALLY WORKS:**
+```javascript
+// ONE chart instance with multiple price scales for visual separation
+const chart = LightweightCharts.createChart(container, options);
+
+// Price on main 'right' scale
+priceSeries = chart.addCandlestickSeries({ priceScaleId: 'right' });
+
+// Volume on separate scale with margins (creates visual pane)
+volumeSeries = chart.addHistogramSeries({
+    priceScaleId: 'volume',
+    scaleMargins: { top: 0.7, bottom: 0 }  // Pushes to bottom 30%
+});
+
+// CVD on 'left' scale with margins
+spotCvdSeries = chart.addLineSeries({
+    priceScaleId: 'left',
+    scaleMargins: { top: 0.4, bottom: 0.3 }  // Middle 30%
+});
+
+// Score on overlay scale with margins
+scoreSeries = chart.addLineSeries({
+    priceScaleId: 'score',
+    scaleMargins: { top: 0.8, bottom: 0.05 }  // Bottom 15%
+});
+```
+
+**CRITICAL LESSON:** Multi-pane appearance = ONE chart + multiple priceScaleId + scaleMargins
+**NOT:** Multiple chart instances (breaks data continuity)
+
+**VOLUME BAR BEST PRACTICES (TradingView Standard):**
+- Use histogram series with `priceScaleId: 'volume'`
+- Set `scaleMargins: { top: 0.8, bottom: 0.02 }` for bottom 20% placement
+- Color based on candle direction (green up, red down)
+- Hide last value and price line for cleaner appearance
+- Format as volume type with appropriate precision
+
+**WRONG - Multiple charts:**
+```javascript
+const mainChart = LightweightCharts.createChart(mainContainer);
+const volumeChart = LightweightCharts.createChart(volumeContainer);
+const cvdChart = LightweightCharts.createChart(cvdContainer);
+const scoreChart = LightweightCharts.createChart(scoreContainer);
+// Complex sync logic trying to make them work together...
+```
+
+**RIGHT - Single chart with panes:**
+```javascript
+const chart = LightweightCharts.createChart(container);
+// Price on main scale
+const priceSeries = chart.addCandlestickSeries({ priceScaleId: 'right' });
+// Volume on separate scale with margins
+const volumeSeries = chart.addHistogramSeries({ 
+    priceScaleId: 'volume',
+    scaleMargins: { top: 0.7, bottom: 0 }
+});
+// CVD on left scale
+const cvdSeries = chart.addLineSeries({ priceScaleId: 'left' });
+// Score on overlay scale
+const scoreSeries = chart.addLineSeries({ 
+    priceScaleId: 'score',
+    scaleMargins: { top: 0.8, bottom: 0.05 }
+});
+```
+
+**LESSON:** TradingView panes = ONE chart + multiple price scales, NOT multiple charts!
+
+---
+
+## 🚨 RECURRING DASHBOARD ISSUES
+
+### The Broken Timeframe Logic Pattern
+**Frequency:** Very common JavaScript bug
+**What Happens:** Code checks `!isNaN(value)` BEFORE checking specific values
+**Impact:** Hour and day timeframes completely broken
+
+**THE BUG:**
+```javascript
+// BROKEN - generic check runs first!
+if (!isNaN(tf)) {
+    tfKey = tf + 'm';  // '60' becomes '60m' instead of '1h'
+} else if (tf === '60') {
+    tfKey = '1h';  // NEVER REACHED!
+}
+```
+
+**THE FIX:**
+```javascript
+// FIXED - check specific values first!
+if (tf === '60') {
+    tfKey = '1h';  // Now this works!
+} else if (!isNaN(tf)) {
+    tfKey = tf + 'm';  // Only for other numbers
+}
+```
+
+**LESSON:** Always check specific values BEFORE generic conditions in if-else chains!
+
+---
+
+### The Empty Chart JavaScript Error Pattern
+**Frequency:** Happens almost EVERY time we modify the dashboard
+**What Happens:** Charts appear empty, JavaScript error: "Cannot access X before initialization"
+**Root Cause:** Variable references added before the variables are declared
+
+**COMMON MANIFESTATIONS:**
+1. `window.charts.volume = volumeChart;` before `volumeChart` is created
+2. Trying to store chart references immediately after `window.charts = {}`
+3. Code refactoring that moves variable usage before declaration
+
+**DIAGNOSTIC STEPS:**
+```bash
+# 1. Open browser console to see the exact error
+# 2. Look for "Cannot access X before initialization"
+# 3. Find where X is first referenced vs where it's declared
+# 4. Move the reference AFTER the declaration
+```
+
+**FIX PATTERN:**
+```javascript
+// WRONG - Reference before declaration
+window.charts.main = mainChart;
+window.charts.volume = volumeChart;  // ERROR: volumeChart doesn't exist yet!
+
+// RIGHT - Reference after declaration
+const volumeChart = LightweightCharts.createChart(...);
+window.charts.volume = volumeChart;  // OK: volumeChart exists now
+```
+
+**PREVENTION:**
+- ✅ ALWAYS declare variables before using them
+- ✅ Store chart references ONLY after creating the charts
+- ✅ Test dashboard in browser after EVERY modification
+- ✅ Check browser console for errors immediately
+
+---
+
+### The Indicator Data Truncation Issue
+**What Happens:** Price data continues but indicators (CVD, Strategy Score) stop earlier
+**Root Cause:** Different data series have different lengths or time ranges
+**Impact:** Charts look broken with indicators stopping mid-way
+
+**DIAGNOSTIC:**
+- Price chart shows full time range (e.g., 10:00 to 11:00)
+- CVD stops at 10:45
+- Strategy scores stop at 10:30
+
+**LIKELY CAUSES:**
+1. Data sampling/downsampling not synchronized
+2. Different data sources with different end times
+3. Strategy not generating scores for entire period
+
+---
+
 ## 🔴 CRITICAL PATTERNS TO AVOID
 
 ### 1. The Visualizer Multiplication Problem

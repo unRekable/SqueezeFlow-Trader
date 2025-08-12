@@ -92,6 +92,10 @@ class TradingViewUnified:
         
         if not ohlcv.empty:
             for idx, row in ohlcv.iterrows():
+                # Skip rows with NaN values
+                if pd.isna(row['open']) or pd.isna(row['high']) or pd.isna(row['low']) or pd.isna(row['close']):
+                    continue
+                    
                 candles.append({
                     'time': int(idx.timestamp()),
                     'open': float(row['open']),
@@ -100,11 +104,14 @@ class TradingViewUnified:
                     'close': float(row['close'])
                 })
                 
-                volumes.append({
-                    'time': int(idx.timestamp()),
-                    'value': float(row.get('volume', 0)),
-                    'color': '#26a69a' if row['close'] >= row['open'] else '#ef5350'
-                })
+                # Only add volume if we have valid price data
+                volume_val = row.get('volume', 0)
+                if not pd.isna(volume_val):
+                    volumes.append({
+                        'time': int(idx.timestamp()),
+                        'value': float(volume_val),
+                        'color': '#26a69a' if row['close'] >= row['open'] else '#ef5350'
+                    })
             
             # Downsample only if we have excessive data points
             if len(candles) > 10000:
@@ -140,6 +147,15 @@ class TradingViewUnified:
         symbol = results.get('symbol', 'UNKNOWN')
         ohlcv = dataset.get('ohlcv', pd.DataFrame())
         
+        # Log data quality
+        if ohlcv.empty:
+            logger.warning("⚠️ OHLCV data is empty!")
+        else:
+            nan_count = ohlcv[['open', 'high', 'low', 'close']].isna().sum().sum()
+            if nan_count > 0:
+                logger.warning(f"⚠️ OHLCV data contains {nan_count} NaN values!")
+                logger.info(f"Data shape: {ohlcv.shape}, Date range: {ohlcv.index[0]} to {ohlcv.index[-1]}")
+        
         # Get executed orders from results (where they should be)
         executed_orders = results.get('executed_orders', [])
         
@@ -147,8 +163,9 @@ class TradingViewUnified:
         ohlcv_1s = ohlcv.copy() if not ohlcv.empty else pd.DataFrame()
         
         # Prepare all timeframe data upfront for JavaScript
+        # REMOVED useless second timeframes (5s, 15s, 30s) - only keeping standard trading timeframes
         timeframes_data = {}
-        for tf in ['1s', '5s', '15s', '30s', '1m', '5m', '15m', '30m', '1h', '4h', '1d']:
+        for tf in ['1s', '1m', '5m', '15m', '30m', '1h', '4h', '1d']:
             candles, volumes, use_line = self._prepare_chart_data_for_timeframe(ohlcv_1s, tf)
             timeframes_data[tf] = {
                 'candles': candles,
@@ -161,12 +178,18 @@ class TradingViewUnified:
         candles = timeframes_data[default_tf]['candles']
         volumes = timeframes_data[default_tf]['volumes']
         
-        # CVD data
-        spot_cvd = self._get_indicator_data(dataset, 'spot_cvd')
-        futures_cvd = self._get_indicator_data(dataset, 'futures_cvd')
+        # Get the time range from the main candle data to ensure all data is aligned
+        if candles:
+            time_range = (candles[0]['time'], candles[-1]['time'])
+        else:
+            time_range = None
+            
+        # CVD data - ensure same time range as candles
+        spot_cvd = self._get_indicator_data(dataset, 'spot_cvd', time_range)
+        futures_cvd = self._get_indicator_data(dataset, 'futures_cvd', time_range)
         
-        # Strategy scores
-        strategy_scores = self._get_strategy_scores(results, dataset)
+        # Strategy scores - ensure same time range as candles
+        strategy_scores = self._get_strategy_scores(results, dataset, time_range)
         
         # Trade markers
         markers = self._get_trade_markers(executed_orders)
@@ -250,24 +273,47 @@ class TradingViewUnified:
             display: block;
         }}
         
-        /* TradingView chart containers */
+        /* TradingView unified chart container */
         #tradingview-chart {{
             height: calc(100vh - 100px);
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
+            background: #131722;
+            border: 2px solid #2962ff;  /* Blue border for unified chart */
+            border-radius: 4px;
+            overflow: hidden;
         }}
         
         .chart-pane {{
             background: #131722;
-            border: 1px solid #2a2e39;
+            border-left: 1px solid #2a2e39;
+            border-right: 1px solid #2a2e39;
+            border-bottom: 1px solid #2a2e39;
             position: relative;
         }}
         
-        #chart-main {{ height: 50%; }}
+        #chart-main {{
+            border-top: 1px solid #2a2e39;
+        }}
+        
+        /* Pane labels for unified appearance */
+        .pane-label {{
+            position: absolute;
+            top: 5px;
+            left: 10px;
+            color: #787b86;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            z-index: 10;
+            background: rgba(19, 23, 34, 0.8);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }}
+        
+        /* Unified pane sizing for better integration */
+        #chart-main {{ height: 45%; }}
         #chart-volume {{ height: 15%; }}
         #chart-cvd {{ height: 20%; }}
-        #chart-score {{ height: 15%; }}
+        #chart-score {{ height: 20%; }}
         
         /* Header */
         .header {{
@@ -410,10 +456,7 @@ class TradingViewUnified:
         </div>
         
         <div id="tradingview-chart">
-            <div id="chart-main" class="chart-pane"></div>
-            <div id="chart-volume" class="chart-pane"></div>
-            <div id="chart-cvd" class="chart-pane"></div>
-            <div id="chart-score" class="chart-pane"></div>
+            <!-- Single chart container for true TradingView panes -->
         </div>
     </div>
     
@@ -518,33 +561,46 @@ class TradingViewUnified:
                 }},
                 timeScale: {{
                     borderColor: '#2a2e39',
+                    timeVisible: true,
+                    secondsVisible: false,
                 }}
             }};
             
-            // Store chart instances globally for timeframe switching
-            window.charts = {{}};
-            
-            // PANE 1: Main chart with Candlesticks or Line (for 1s)
-            const mainContainer = document.getElementById('chart-main');
-            const mainChart = LightweightCharts.createChart(mainContainer, {{
+            // Create ONE chart with multiple panes using price scales
+            const chartContainer = document.getElementById('tradingview-chart');
+            const chart = LightweightCharts.createChart(chartContainer, {{
                 ...chartOptions,
-                width: mainContainer.clientWidth,
-                height: mainContainer.clientHeight,
+                width: chartContainer.clientWidth,
+                height: chartContainer.clientHeight,
+                rightPriceScale: {{
+                    visible: true,
+                    borderColor: '#2a2e39',
+                    scaleMargins: {{
+                        top: 0.1,
+                        bottom: 0.3,
+                    }}
+                }},
+                leftPriceScale: {{
+                    visible: true,
+                    borderColor: '#2a2e39',
+                }},
+                overlayPriceScales: {{
+                    borderColor: '#2a2e39',
+                }}
             }});
-            window.charts.main = mainChart;
-            window.charts.volume = volumeChart;
-            window.charts.cvd = cvdChart;
-            window.charts.score = scoreChart;
             
-            // Determine chart type based on current timeframe
+            window.chart = chart;
+            
+            // PANE 1: Price - Main series (candlesticks/line)
             const useLineChart = timeframesData[currentTimeframe].useLineChart;
-            let mainSeries;
             
             if (useLineChart) {{
                 // Use line chart for sub-minute timeframes
-                window.mainSeries = mainChart.addLineSeries({{
+                window.mainSeries = chart.addLineSeries({{
                     color: '#2962ff',
                     lineWidth: 2,
+                    priceScaleId: 'right',
+                    title: 'Price',
                 }});
                 
                 // Convert candle data to line data (using close prices)
@@ -558,12 +614,14 @@ class TradingViewUnified:
                 }}
             }} else {{
                 // Use candlestick chart for larger timeframes
-                window.mainSeries = mainChart.addCandlestickSeries({{
+                window.mainSeries = chart.addCandlestickSeries({{
                     upColor: '#26a69a',
                     downColor: '#ef5350',
                     borderVisible: false,
                     wickUpColor: '#26a69a',
                     wickDownColor: '#ef5350',
+                    priceScaleId: 'right',
+                    title: 'ETH',
                 }});
                 
                 if (candleData.length > 0) {{
@@ -578,17 +636,10 @@ class TradingViewUnified:
                 }}
             }}
             
-            // PANE 2: Volume
-            const volumeContainer = document.getElementById('chart-volume');
-            const volumeChart = LightweightCharts.createChart(volumeContainer, {{
-                ...chartOptions,
-                width: volumeContainer.clientWidth,
-                height: volumeContainer.clientHeight,
-            }});
-            window.charts.volume = volumeChart;
-            
-            window.volumeSeries = volumeChart.addHistogramSeries({{
+            // PANE 2: Volume - Histogram on separate scale
+            window.volumeSeries = chart.addHistogramSeries({{
                 color: '#26a69a',
+                priceScaleId: 'volume',
                 priceFormat: {{
                     type: 'custom',
                     formatter: (vol) => {{
@@ -597,32 +648,33 @@ class TradingViewUnified:
                         return vol.toFixed(0);
                     }}
                 }},
+                scaleMargins: {{
+                    top: 0.7,
+                    bottom: 0,
+                }},
             }});
             
             if (volumeData.length > 0) {{
                 window.volumeSeries.setData(volumeData);
             }}
             
-            // PANE 3: CVD indicators
-            const cvdContainer = document.getElementById('chart-cvd');
-            const cvdChart = LightweightCharts.createChart(cvdContainer, {{
-                ...chartOptions,
-                width: cvdContainer.clientWidth,
-                height: cvdContainer.clientHeight,
-                rightPriceScale: {{
-                    visible: true,
-                }},
+            // PANE 3: CVD - Lines on separate scale with custom positioning
+            // Create CVD price scale
+            chart.applyOptions({{
                 leftPriceScale: {{
                     visible: true,
+                    scaleMargins: {{
+                        top: 0.4,
+                        bottom: 0.3,
+                    }}
                 }}
             }});
-            window.charts.cvd = cvdChart;
             
             if (spotCvdData.length > 0) {{
-                const spotCvdSeries = cvdChart.addLineSeries({{
+                const spotCvdSeries = chart.addLineSeries({{
                     color: '#2962ff',
                     lineWidth: 2,
-                    priceScaleId: 'right',
+                    priceScaleId: 'left',
                     title: 'Spot CVD',
                     priceFormat: {{
                         type: 'custom',
@@ -639,10 +691,10 @@ class TradingViewUnified:
             }}
             
             if (futuresCvdData.length > 0) {{
-                const futuresCvdSeries = cvdChart.addLineSeries({{
+                const futuresCvdSeries = chart.addLineSeries({{
                     color: '#ff9800',
                     lineWidth: 2,
-                    priceScaleId: 'right',
+                    priceScaleId: 'left',
                     title: 'Futures CVD',
                     priceFormat: {{
                         type: 'custom',
@@ -658,42 +710,51 @@ class TradingViewUnified:
                 futuresCvdSeries.setData(futuresCvdData);
             }}
             
-            // PANE 4: Strategy Score - ALWAYS use line chart
-            const scoreContainer = document.getElementById('chart-score');
-            const scoreChart = LightweightCharts.createChart(scoreContainer, {{
-                ...chartOptions,
-                width: scoreContainer.clientWidth,
-                height: scoreContainer.clientHeight,
-            }});
-            window.charts.score = scoreChart;
-            
+            // PANE 4: Strategy Score - Line on overlay scale
             if (strategyScores.length > 0) {{
-                // Always use line series for strategy scores
-                const scoreSeries = scoreChart.addLineSeries({{
+                // Create a separate price scale for strategy scores
+                const scoreSeries = chart.addLineSeries({{
                     color: '#4caf50',
                     lineWidth: 2,
                     title: 'Strategy Score',
+                    priceScaleId: 'score',
                     priceFormat: {{
                         type: 'price',
                         precision: 2,
                         minMove: 0.01
-                    }}
+                    }},
+                    lineStyle: 0,  // Solid line
+                    crosshairMarkerVisible: true,
+                    scaleMargins: {{
+                        top: 0.8,
+                        bottom: 0.05,
+                    }},
                 }});
                 scoreSeries.setData(strategyScores);
                 
-                // Add threshold lines
-                const minEntryLine = scoreChart.addLineSeries({{
+                // Add threshold lines on same scale
+                const minEntryLine = chart.addLineSeries({{
                     color: 'rgba(255, 255, 255, 0.2)',
                     lineWidth: 1,
                     lineStyle: 2,
-                    title: 'Min Entry (3.0)'
+                    title: 'Min Entry (3.0)',
+                    priceScaleId: 'score',
+                    scaleMargins: {{
+                        top: 0.8,
+                        bottom: 0.05,
+                    }},
                 }});
                 
-                const goodEntryLine = scoreChart.addLineSeries({{
+                const goodEntryLine = chart.addLineSeries({{
                     color: 'rgba(76, 175, 80, 0.3)',
                     lineWidth: 1,
                     lineStyle: 2,
-                    title: 'Good Entry (6.0)'
+                    title: 'Good Entry (6.0)',
+                    priceScaleId: 'score',
+                    scaleMargins: {{
+                        top: 0.8,
+                        bottom: 0.05,
+                    }},
                 }});
                 
                 // Create threshold data
@@ -702,60 +763,18 @@ class TradingViewUnified:
                 goodEntryLine.setData(times.map(t => ({{ time: t, value: 6.0 }})));
             }}
             
-            // Sync time scales
-            const charts = [mainChart, volumeChart, cvdChart, scoreChart];
-            const timeScales = charts.map(chart => chart.timeScale());
+            // Single chart - no synchronization needed!
             
-            // Sync crosshair move
-            charts.forEach((chart, index) => {{
-                chart.subscribeCrosshairMove((param) => {{
-                    charts.forEach((otherChart, otherIndex) => {{
-                        if (otherIndex !== index) {{
-                            otherChart.applyOptions({{
-                                crosshair: {{
-                                    horzLine: {{
-                                        visible: false,
-                                    }}
-                                }}
-                            }});
-                        }}
-                    }});
-                }});
-            }});
-            
-            // Sync time scale changes
-            timeScales.forEach((timeScale, index) => {{
-                timeScale.subscribeVisibleLogicalRangeChange((range) => {{
-                    if (range) {{
-                        timeScales.forEach((otherTimeScale, otherIndex) => {{
-                            if (otherIndex !== index) {{
-                                otherTimeScale.setVisibleLogicalRange(range);
-                            }}
-                        }});
-                    }}
-                }});
-            }});
-            
-            // Fit content on all charts
-            charts.forEach(chart => chart.timeScale().fitContent());
+            // Fit content to show all data
+            if (candleData.length > 0) {{
+                chart.timeScale().fitContent();
+            }}
             
             // Handle resize
             window.addEventListener('resize', () => {{
-                mainChart.applyOptions({{
-                    width: mainContainer.clientWidth,
-                    height: mainContainer.clientHeight
-                }});
-                volumeChart.applyOptions({{
-                    width: volumeContainer.clientWidth,
-                    height: volumeContainer.clientHeight
-                }});
-                cvdChart.applyOptions({{
-                    width: cvdContainer.clientWidth,
-                    height: cvdContainer.clientHeight
-                }});
-                scoreChart.applyOptions({{
-                    width: scoreContainer.clientWidth,
-                    height: scoreContainer.clientHeight
+                chart.applyOptions({{
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight
                 }});
             }});
         }}
@@ -856,8 +875,8 @@ class TradingViewUnified:
         
         // Function to update charts when timeframe changes
         function updateChartsForTimeframe(tfKey) {{
-            if (!window.charts || !window.charts.main) {{
-                console.error('Charts not initialized');
+            if (!window.chart) {{
+                console.error('Chart not initialized');
                 return;
             }}
             
@@ -868,21 +887,21 @@ class TradingViewUnified:
                 return;
             }}
             
-            // Clear existing series from all charts
-            const mainChart = window.charts.main;
-            const volumeChart = window.charts.volume;
-            const cvdChart = window.charts.cvd;
-            const scoreChart = window.charts.score;
+            const chart = window.chart;
             
-            // Remove all series from main chart
+            // Remove all series from chart safely
             if (window.mainSeries) {{
-                mainChart.removeSeries(window.mainSeries);
+                try {{
+                    chart.removeSeries(window.mainSeries);
+                }} catch (e) {{
+                    console.log('Could not remove main series:', e);
+                }}
             }}
             
             // Create new series based on timeframe
             if (tfData.useLineChart) {{
                 // Use line chart for sub-minute timeframes
-                window.mainSeries = mainChart.addLineSeries({{
+                window.mainSeries = chart.addLineSeries({{
                     color: '#2962ff',
                     lineWidth: 2,
                 }});
@@ -898,7 +917,7 @@ class TradingViewUnified:
                 }}
             }} else {{
                 // Use candlestick chart for larger timeframes
-                window.mainSeries = mainChart.addCandlestickSeries({{
+                window.mainSeries = chart.addCandlestickSeries({{
                     upColor: '#26a69a',
                     downColor: '#ef5350',
                     borderVisible: false,
@@ -919,32 +938,13 @@ class TradingViewUnified:
                 }}
             }}
             
-            // Update volume chart
-            if (window.volumeSeries && volumeChart) {{
-                volumeChart.removeSeries(window.volumeSeries);
-            }}
-            
-            window.volumeSeries = volumeChart.addHistogramSeries({{
-                color: '#26a69a',
-                priceFormat: {{
-                    type: 'custom',
-                    formatter: (vol) => {{
-                        if (vol >= 1000000) return (vol / 1000000).toFixed(1) + 'M';
-                        if (vol >= 1000) return (vol / 1000).toFixed(1) + 'K';
-                        return vol.toFixed(0);
-                    }}
-                }},
-            }});
-            
-            if (tfData.volumes.length > 0) {{
+            // Update volume series with new data
+            if (window.volumeSeries) {{
                 window.volumeSeries.setData(tfData.volumes);
             }}
             
-            // Fit content on all charts
-            mainChart.timeScale().fitContent();
-            volumeChart.timeScale().fitContent();
-            cvdChart.timeScale().fitContent();
-            scoreChart.timeScale().fitContent();
+            // Fit content on chart
+            chart.timeScale().fitContent();
         }}
         
         // Initialize trading chart on load
@@ -955,13 +955,18 @@ class TradingViewUnified:
             // Mark the default timeframe button as active
             document.querySelectorAll('.timeframe-btn').forEach(btn => {{
                 const btnTf = btn.dataset.tf;
-                // Handle conversion between button format and data format
+                // Handle conversion between button format and data format - MUST match click handler logic
                 let btnKey = btnTf;
-                if (!isNaN(btnTf) && btnTf !== '1D') {{
-                    btnKey = btnTf + 'm';
-                }} else if (btnTf === '1D') {{
+                if (btnTf === '1D') {{
                     btnKey = '1d';
+                }} else if (btnTf === '60') {{
+                    btnKey = '1h';
+                }} else if (btnTf === '240') {{
+                    btnKey = '4h';
+                }} else if (btnTf === '1' || btnTf === '5' || btnTf === '15' || btnTf === '30') {{
+                    btnKey = btnTf + 'm';
                 }}
+                // Otherwise keep as-is (1s, 5s, 15s, 30s)
                 
                 if (btnKey === currentTimeframe) {{
                     btn.classList.add('active');
@@ -982,14 +987,15 @@ class TradingViewUnified:
                     
                     // Get timeframe key - convert button format to internal format
                     let tfKey = tf;
+                    // Check specific values FIRST before generic numeric check
                     if (tf === '1D') {{
                         tfKey = '1d';
                     }} else if (tf === '60') {{
                         tfKey = '1h';
                     }} else if (tf === '240') {{
                         tfKey = '4h';
-                    }} else if (!isNaN(tf)) {{
-                        // Convert numeric minutes to string format (1, 5, 15, 30)
+                    }} else if (tf === '1' || tf === '5' || tf === '15' || tf === '30') {{
+                        // Only these specific minute values
                         tfKey = tf + 'm';
                     }}
                     // Otherwise keep as-is (1s, 5s, 15s, 30s)
@@ -997,6 +1003,9 @@ class TradingViewUnified:
                     // Check if we have data for this timeframe
                     if (!timeframesData[tfKey]) {{
                         console.error('No data for timeframe:', tfKey);
+                        console.error('Available timeframes:', Object.keys(timeframesData));
+                        console.error('Button value was:', tf);
+                        alert(`Timeframe ${{tfKey}} not available. Available: ${{Object.keys(timeframesData).join(', ')}}`);
                         return;
                     }}
                     
@@ -1023,18 +1032,31 @@ class TradingViewUnified:
         logger.info(f"✅ TradingView Unified dashboard created: {dashboard_path}")
         return str(dashboard_path)
     
-    def _get_indicator_data(self, dataset, field):
-        """Get indicator data from dataset - USE ALL DATA"""
+    def _get_indicator_data(self, dataset, field, time_range=None):
+        """Get indicator data from dataset - aligned with candle time range"""
         data = []
         if field in dataset:
             series = dataset[field]
             if isinstance(series, pd.Series) and not series.empty:
-                # Use ALL data points for accuracy
-                for idx, val in series.items():
-                    data.append({
-                        'time': int(idx.timestamp()),
-                        'value': float(val)
-                    })
+                # Filter to match time range if provided
+                if time_range:
+                    start_time, end_time = time_range
+                    filtered_data = []
+                    for idx, val in series.items():
+                        timestamp = int(idx.timestamp())
+                        if start_time <= timestamp <= end_time:
+                            filtered_data.append({
+                                'time': timestamp,
+                                'value': float(val)
+                            })
+                    data = filtered_data
+                else:
+                    # Use all data if no time range specified
+                    for idx, val in series.items():
+                        data.append({
+                            'time': int(idx.timestamp()),
+                            'value': float(val)
+                        })
                 
                 # Only downsample if we have too many points
                 if len(data) > 5000:
@@ -1042,8 +1064,8 @@ class TradingViewUnified:
                     data = data[::step]
         return data
     
-    def _get_strategy_scores(self, results, dataset):
-        """Get strategy scores from results or dataset"""
+    def _get_strategy_scores(self, results, dataset, time_range=None):
+        """Get strategy scores from results or dataset - aligned with candle time range"""
         data = []
         
         # First check for squeeze_scores in results
@@ -1053,27 +1075,47 @@ class TradingViewUnified:
                 timestamps = scores['timestamps']
                 score_values = scores['scores']
                 if timestamps and score_values:
-                    # Use ALL data points for accuracy - don't skip any
+                    # Filter to match time range if provided
                     for i in range(len(timestamps)):
                         ts = timestamps[i]
                         if hasattr(ts, 'timestamp'):
                             unix_time = int(ts.timestamp())
                         else:
                             unix_time = int(ts)
-                        data.append({
-                            'time': unix_time,
-                            'value': float(score_values[i])
-                        })
+                        
+                        # Only include if within time range
+                        if time_range:
+                            start_time, end_time = time_range
+                            if start_time <= unix_time <= end_time:
+                                data.append({
+                                    'time': unix_time,
+                                    'value': float(score_values[i])
+                                })
+                        else:
+                            data.append({
+                                'time': unix_time,
+                                'value': float(score_values[i])
+                            })
         
         # If no scores in results, try to get from dataset
         elif 'strategy_scores' in dataset:
             series = dataset['strategy_scores']
             if isinstance(series, pd.Series) and not series.empty:
                 for idx, val in series.items():
-                    data.append({
-                        'time': int(idx.timestamp()),
-                        'value': float(val)
-                    })
+                    unix_time = int(idx.timestamp())
+                    # Only include if within time range
+                    if time_range:
+                        start_time, end_time = time_range
+                        if start_time <= unix_time <= end_time:
+                            data.append({
+                                'time': unix_time,
+                                'value': float(val)
+                            })
+                    else:
+                        data.append({
+                            'time': unix_time,
+                            'value': float(val)
+                        })
         
         # Downsample if we have too many points for performance
         if len(data) > 5000:

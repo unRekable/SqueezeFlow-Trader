@@ -413,7 +413,11 @@ class SqueezeFlowStrategy(BaseStrategy):
             position_size = base_risk * position_size_factor
             
             if position_size <= 0 or not np.isfinite(position_size):
-                self.logger.warning(f"Invalid position size calculated: {position_size}, total_value: {total_value}")
+                # This happens when score < 4 (position_size_factor = 0) - not an error
+                if position_size_factor == 0:
+                    self.logger.debug(f"Score too low for position (factor=0), score: {total_score:.1f}")
+                else:
+                    self.logger.warning(f"Invalid position size calculated: {position_size}, total_value: {total_value}")
                 return orders
             
             # Get current price for entry
@@ -422,7 +426,7 @@ class SqueezeFlowStrategy(BaseStrategy):
                 self.logger.warning("No OHLCV data available for entry price")
                 return orders
                 
-            # Safe price access
+            # Safe price access with NaN checking
             if 'close' in ohlcv.columns:
                 current_price = ohlcv['close'].iloc[-1]
             elif len(ohlcv.columns) > 3:
@@ -431,8 +435,13 @@ class SqueezeFlowStrategy(BaseStrategy):
                 self.logger.warning("Cannot determine current price from OHLCV data")
                 return orders
             
+            # Critical: Check for NaN price BEFORE using it
+            if not np.isfinite(current_price) or current_price <= 0:
+                self.logger.warning(f"Invalid price from OHLCV: {current_price}")
+                return orders
+            
             # Convert to base quantity (before leverage)
-            base_quantity = position_size / current_price if current_price > 0 else 0
+            base_quantity = position_size / current_price
             
             # Validate quantity
             if not np.isfinite(base_quantity) or base_quantity <= 0:

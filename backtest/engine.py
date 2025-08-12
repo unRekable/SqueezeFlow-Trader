@@ -227,12 +227,13 @@ class BacktestEngine:
                 data_load_timer.__enter__()
                 
             try:
-                # ALWAYS load 1-second data - it's the only data we have
+                # Load data at the requested timeframe (not always 1s!)
+                # This dramatically improves performance for longer backtests
                 full_dataset = self.data_pipeline.get_complete_dataset(
                     symbol=symbol,
                     start_time=start_time,
                     end_time=end_time,
-                    timeframe='1s'  # ALWAYS 1s - only data available
+                    timeframe=timeframe  # Use the requested timeframe
                 )
                 
                 # Record data loading metrics
@@ -291,7 +292,7 @@ class BacktestEngine:
                     symbol=symbol,
                     start_time=start_time,
                     end_time=end_time,
-                    timeframe='1s'  # ALWAYS 1s - only data available
+                    timeframe=timeframe  # Use the requested timeframe, not always 1s
                 )
                 if not full_dataset:
                     self.logger.error(f"Failed to load data for {symbol}")

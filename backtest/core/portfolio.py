@@ -278,10 +278,14 @@ class Portfolio:
     
     def update_position_prices(self, symbol_prices: Dict[str, float]):
         """Update current prices for all positions"""
+        import numpy as np
         
         for position in self.positions.values():
             if position.symbol in symbol_prices:
                 new_price = symbol_prices[position.symbol]
+                # Critical: Prevent NaN prices from corrupting portfolio
+                if not np.isfinite(new_price) or new_price <= 0:
+                    continue  # Skip invalid price updates
                 position.current_price = new_price
                 
                 # Calculate unrealized PnL
