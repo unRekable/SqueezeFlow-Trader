@@ -300,17 +300,22 @@ class DataPipeline:
     
     async def get_complete_dataset_async(self, symbol: str, start_time: datetime, 
                                        end_time: datetime, timeframe: str = '5m',
-                                       prefer_1s_data: bool = True, max_lookback_minutes: int = 30) -> Dict:
+                                       prefer_1s_data: bool = True, max_lookback_minutes: int = 30,
+                                       execution_mode: str = 'candle') -> Dict:
         """
         Get complete dataset for strategy analysis with 1-second data support
+        
+        IMPORTANT: Backtests process data tick-by-tick sequentially regardless of timeframe!
+        The timeframe parameter ONLY controls visualization aggregation, NOT execution.
         
         Args:
             symbol: Trading symbol
             start_time: Start datetime
             end_time: End datetime
-            timeframe: Target timeframe for aggregation
+            timeframe: Target timeframe for VISUALIZATION ONLY (not execution!)
             prefer_1s_data: Try to use 1-second data first
             max_lookback_minutes: Limit lookback for real-time efficiency
+            execution_mode: 'tick' for raw sequential data, 'candle' for aggregated (default for compatibility)
             
         Returns:
             Dict with all required data for strategy
@@ -374,25 +379,34 @@ class DataPipeline:
         
         # Fallback to regular data loading
         logger.debug(f"Loading regular data for {symbol}")
-        return self.get_complete_dataset(symbol, start_time, end_time, timeframe)
+        return self.get_complete_dataset(symbol, start_time, end_time, timeframe, execution_mode)
     
     def get_complete_dataset(self, symbol: str, start_time: datetime, 
-                            end_time: datetime, timeframe: str = '5m') -> Dict:
+                            end_time: datetime, timeframe: str = '5m',
+                            execution_mode: str = 'candle') -> Dict:
         """
         Get complete dataset for strategy analysis (synchronous fallback)
+        
+        IMPORTANT: Backtests process data sequentially, candle by candle!
+        The timeframe parameter controls BOTH data granularity AND visualization.
+        Example: '5m' means the backtest processes 5-minute candles sequentially.
         
         Args:
             symbol: Trading symbol
             start_time: Start datetime
             end_time: End datetime
-            timeframe: Timeframe
+            timeframe: Timeframe for data granularity (1s, 5m, 15m, 1h, etc.)
+            execution_mode: 'tick' forces 1s data, 'candle' uses requested timeframe (default)
             
         Returns:
             Dict with all required data for strategy
         """
+        # execution_mode='tick' forces 1s data, otherwise use requested timeframe
+        data_timeframe = '1s' if execution_mode == 'tick' else timeframe
+        
         # Load raw data
-        ohlcv_df = self.load_raw_ohlcv_data(symbol, start_time, end_time, timeframe)
-        spot_df, futures_df = self.load_raw_volume_data(symbol, start_time, end_time, timeframe)
+        ohlcv_df = self.load_raw_ohlcv_data(symbol, start_time, end_time, data_timeframe)
+        spot_df, futures_df = self.load_raw_volume_data(symbol, start_time, end_time, data_timeframe)
         
         # Calculate CVD data
         cvd_data = self.calculate_cvd_data(spot_df, futures_df)
@@ -402,7 +416,9 @@ class DataPipeline:
         
         return {
             'symbol': symbol,
-            'timeframe': timeframe,
+            'timeframe': timeframe,  # Visualization timeframe requested
+            'actual_timeframe': data_timeframe,  # Actual data loaded (1s for tick mode)
+            'execution_mode': execution_mode,  # How data will be processed
             'start_time': start_time,
             'end_time': end_time,
             'ohlcv': ohlcv_df,
@@ -417,7 +433,8 @@ class DataPipeline:
                 'spot_markets_count': len(markets.get('spot', [])),
                 'futures_markets_count': len(markets.get('perp', [])),
                 'data_points': len(ohlcv_df),
-                'lookback_limited': False
+                'lookback_limited': False,
+                'is_tick_data': execution_mode == 'tick'
             }
         }
     

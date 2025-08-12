@@ -5,10 +5,11 @@
 1. **ALWAYS read SYSTEM_TRUTH.md FIRST** - Contains what actually works vs what's broken
 2. **ALWAYS check README.md** - May contain critical updates or configuration changes  
 3. **ALWAYS review CLAUDE.md (this file)** - For project-specific instructions
-4. **ALWAYS check DASHBOARD_PROGRESS.md** - For current dashboard implementation status
-5. **ALWAYS check relevant docs in /docs/** - For component-specific details
-6. **NEVER attempt ANY task without checking docs FIRST**
-7. **NEVER assume you remember - ALWAYS verify from documentation**
+4. **ALWAYS check LESSONS_LEARNED.md** - For patterns to avoid and solutions that work
+5. **ALWAYS check DASHBOARD_PROGRESS.md** - For current dashboard implementation status
+6. **ALWAYS check relevant docs in /docs/** - For component-specific details
+7. **NEVER attempt ANY task without checking docs FIRST**
+8. **NEVER assume you remember - ALWAYS verify from documentation**
 
 **If you skip documentation checks, you WILL fail. This is non-negotiable.**
 
@@ -24,7 +25,8 @@
 1. **Document what worked** in the appropriate tracking file
 2. **Document what failed** and why
 3. **Update progress status** with specific details
-4. **Add lessons learned** to prevent repeated mistakes
+4. **Add lessons learned** to LESSONS_LEARNED.md to prevent repeated mistakes
+5. **Check for pattern violations** from LESSONS_LEARNED.md
 
 ### Self-Validation Loop:
 1. **Execute** → 2. **Validate** → 3. **Document** → 4. **Learn**
@@ -86,6 +88,14 @@ Change one = must update all or dashboards break
 
 ## 🔴 CRITICAL: Implementation Process - MANDATORY WORKFLOW
 
+**STEP 0: CHECK EXISTING** (Before creating ANYTHING new)
+```bash
+# PREVENT DUPLICATION - The #1 cause of architectural issues
+grep -r "class.*ClassName" .  # Find if it already exists
+grep -r "from.*module import" .  # Find what's actually being used
+ls -la **/temp_* **/debug_* **/test_*  # Find temporary files
+```
+
 **STEP 1: SEARCH** (Before ANY changes)
 ```bash
 grep -r "feature_name" .  # Find ALL references
@@ -108,12 +118,21 @@ python3 test_integration.py  # Full test
 - Add to IMPLEMENTATION_CHECKLIST.md
 - Document what was ACTUALLY done, not planned
 
-**FAILURE MODE TO AVOID:**
-The OI disable took hours because I:
-1. Created documentation about how it should work ❌
-2. Made example files showing the pattern ❌
-3. But didn't actually update the code to use it ❌
-4. You had to tell me to check if I actually DID it ❌
+**FAILURE MODES TO AVOID (See LESSONS_LEARNED.md for full list):**
+
+1. **The Visualizer Multiplication:** Creating new instead of fixing existing
+   - We had 14 visualizers because each debug session created a new one ❌
+   
+2. **The Config Bypass:** Assuming all components use central config
+   - Phase3 and Phase5 didn't import indicator_config at all ❌
+   
+3. **The Documentation Delusion:** Writing docs instead of implementation
+   - Created documentation about how it should work ❌
+   - Made example files showing the pattern ❌
+   - But didn't actually update the code to use it ❌
+   
+4. **The Data Path Chaos:** Multiple ways to access same data
+   - Strategy used DataPipeline AND direct InfluxDB queries ❌
 
 **SUCCESS MODE:**
 1. grep for ALL occurrences ✅

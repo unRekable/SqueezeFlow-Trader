@@ -4,6 +4,16 @@ SqueezeFlow Strategy - Main Orchestrator
 Main strategy class that orchestrates all 5 phases of the SqueezeFlow trading methodology.
 Implements the complete strategy as documented in /docs/strategy/SqueezeFlow.md
 
+CRITICAL: Tick-by-Tick Sequential Processing
+=============================================
+This strategy is called for EVERY data point in the backtest sequentially.
+The backtest engine processes all available data tick-by-tick (e.g., every second
+for 1s data), NOT just at candle closes. This simulates real-time trading where
+strategies continuously evaluate market conditions.
+
+The 'timeframe' parameter seen elsewhere is ONLY for visualization/aggregation,
+NOT for execution frequency.
+
 Architecture:
 - Phase 1: Context Assessment (market intelligence)  
 - Phase 2: Divergence Detection (setup identification)
@@ -112,6 +122,11 @@ class SqueezeFlowStrategy(BaseStrategy):
     def process(self, dataset: Dict[str, Any], portfolio_state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Main strategy processing - Execute phases based on position state
+        
+        IMPORTANT: This method is called for EVERY candle in the backtest!
+        - 5m timeframe = called for each 5-minute candle (288 times per day)
+        - 1s timeframe = called for each 1-second candle (86,400 times per day)
+        The backtest simulates real-time trading by processing sequentially.
         
         Process Flow:
         - If position exists: Only run Phase 5 (exit management)
@@ -386,11 +401,19 @@ class SqueezeFlowStrategy(BaseStrategy):
             
             # Base position size from portfolio
             total_value = portfolio_state.get('total_value', 0)
+            
+            # Use initial balance if total_value is 0 (start of backtest)
+            if total_value <= 0:
+                # Try to get initial balance from portfolio_state
+                total_value = portfolio_state.get('cash_balance', 10000)  # Default to 10000 if not set
+                if total_value <= 0:
+                    total_value = 10000  # Fallback default
+                    
             base_risk = total_value * self.config.base_risk_per_trade
             position_size = base_risk * position_size_factor
             
-            if position_size <= 0:
-                self.logger.warning(f"Invalid position size calculated: {position_size}")
+            if position_size <= 0 or not np.isfinite(position_size):
+                self.logger.warning(f"Invalid position size calculated: {position_size}, total_value: {total_value}")
                 return orders
             
             # Get current price for entry
@@ -409,7 +432,12 @@ class SqueezeFlowStrategy(BaseStrategy):
                 return orders
             
             # Convert to base quantity (before leverage)
-            base_quantity = position_size / current_price
+            base_quantity = position_size / current_price if current_price > 0 else 0
+            
+            # Validate quantity
+            if not np.isfinite(base_quantity) or base_quantity <= 0:
+                self.logger.warning(f"Invalid quantity calculated: {base_quantity}, position_size: {position_size}, price: {current_price}")
+                return orders
             
             # Get current CVD values for baseline tracking
             spot_cvd_current = None
@@ -460,7 +488,8 @@ class SqueezeFlowStrategy(BaseStrategy):
             position_side = position.get('side', 'UNKNOWN')
             position_quantity = abs(position.get('quantity', 0))
             
-            if position_quantity <= 0:
+            # Validate quantity is a finite number
+            if not np.isfinite(position_quantity) or position_quantity <= 0:
                 return None
             
             # Get current price

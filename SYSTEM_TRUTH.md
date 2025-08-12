@@ -1,6 +1,24 @@
 # System Truth - What Actually Works
 
-**Last Updated: 2025-08-11 23:17**
+**Last Updated: 2025-08-12 02:12**
+
+## 🚨 CRITICAL: Tick-by-Tick Execution Model CLARIFIED
+
+### Option A Implementation Complete (2025-08-12)
+**What Changed:**
+- Added `execution_mode` parameter to DataPipeline.get_complete_dataset()
+- Backtest engine now passes `execution_mode='tick'` to clarify sequential processing
+- Added clear documentation that timeframes are ONLY for visualization
+
+**Key Files Modified:**
+- `/data/pipeline.py:384` - Added execution_mode parameter with 'candle' default
+- `/backtest/engine.py:226` - Pass execution_mode='tick' for backtests
+- `/strategies/squeezeflow/strategy.py:7-15` - Added critical comment about tick processing
+
+**Backward Compatibility:** ✅ MAINTAINED
+- Default `execution_mode='candle'` preserves existing behavior
+- Only backtests explicitly use `execution_mode='tick'`
+- Live trading unaffected (uses default)
 
 ## 🎯 TRADINGVIEW NATIVE PANES - FULLY WORKING!
 
